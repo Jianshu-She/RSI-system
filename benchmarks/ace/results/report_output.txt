@@ -1,0 +1,31 @@
+# Output of eval/report.py on the source project's result files (2026-10-18, all runs complete)
+====================================================================================================
+FINANCE (test accuracy %; FiNER per-tag, Formula per-question)   [ours | paper DeepSeek-V3.1]
+
+  FORMULA
+   base            68.9 |  67.5   done     mean of 4 runs' initial test 
+   icl             82.0 |  67.0   done     eval_only                    
+   offline_gt      86.5 |  85.5   done     500/500 train steps          best val 89.7@300; vs_base: +35/-1 p<1e-4; vs_icl: +12/-3 p=0.0352
+   offline_nogt    81.0 |  83.0   done     500/500 train steps          best val 83.0@200; vs_base: +36/-12 p=0.0007; vs_icl: +10/-12 p=0.832
+   online_gt       75.5 |  76.5   done     200/200 test samples         
+   online_nogt     79.5 |  78.5   done     200/200 test samples         
+   dc_gt           77.0 |  69.5   done     200/200 test samples         
+   dc_nogt         80.0 |  62.5   done     200/200 test samples         
+
+  FINER
+   base            62.8 |  70.7   done     mean of 4 runs' initial test 
+   icl             70.4 |  72.3   done     eval_only                    
+   offline_gt      72.6 |  78.3   done     936/1000 train steps         best val 75.8@300; resumed@450,600
+   offline_nogt    65.8 |  71.1   done     834/1000 train steps         best val 69.6@700; resumed@300,450
+   online_gt       71.0 |  76.7   done     441/441 test samples         
+   online_nogt     60.8 |  67.3   done     441/441 test samples         resumed@390
+   dc_gt           58.9 |  74.2   done     441/441 test samples         
+   dc_nogt         57.0 |  68.3   done     441/441 test samples         
+
+====================================================================================================
+APPWORLD (TGC/SGC %, test_normal | test_challenge, avg of 4)   [paper avg]
+   react     44.6/26.8 [168/168] | 26.6/10.8 [417/417]  avg 27.2 | paper 42.4
+   off_gt    53.0/33.9 [168/168] | 34.5/19.4 [417/417]  avg 35.2 | paper 59.4  (adapt 90/90 train tasks)  normal vs ReAct +30/-16 p=0.0541  challenge vs ReAct +61/-28 p=0.0006
+   off_nogt  45.8/28.6 [168/168] | 29.7/15.1 [417/417]  avg 29.8 | paper 57.2  (adapt 90/90 train tasks)  normal vs ReAct +20/-18 p=0.871  challenge vs ReAct +48/-35 p=0.188
+   online    47.0/28.6 [168/168] | 31.9/18.0 [417/417]  avg 31.4 | paper 59.5  normal vs ReAct +24/-20 p=0.652  challenge vs ReAct +54/-32 p=0.023
+   lora      46.4/26.8 [168/168] | 29.0/12.2 [417/417]  avg 28.6 | paper None  normal vs ReAct +21/-18 p=0.749  challenge vs ReAct +38/-28 p=0.268

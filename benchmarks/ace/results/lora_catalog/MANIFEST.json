@@ -1,0 +1,450 @@
+[
+ {
+  "name": "formula_ace_v1",
+  "task": "formula",
+  "file": "sft/data_v1/formula.jsonl",
+  "examples": 803,
+  "unique_items": 417,
+  "size_mb": 2.21,
+  "source": "ACE offline (+GT & noGT runs) first-attempt generator answers on TRAIN items, generated WITH the learned playbook; correct only",
+  "target": "full ACE JSON answer (reasoning, bullet_ids citing playbook bullets, final_answer)",
+  "note": "BUGGY: targets cite playbook bullet ids absent from the input -> adapter hallucinates endless id lists (superseded by v2)",
+  "adapter": "sft/runs/lora_r1_2667873/adapter_formula",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 763,
+  "dev_rows": 40,
+  "train_tokens": 507189,
+  "target_tokens": 209541,
+  "steps": 32,
+  "dev_loss_first": 0.371,
+  "dev_loss_last": 0.188,
+  "train_loss_last": 0.227,
+  "train_minutes": 17.1,
+  "test": {
+   "lora_empty": {
+    "acc": 26.0,
+    "base_acc": 69.0,
+    "fixes_vs_base": 1,
+    "breaks_vs_base": 87,
+    "p_vs_base": 0.0,
+    "eval_file": "sft/runs/lora_r1_2667873/evalfin_2668076/eval_formula_lora_empty.json"
+   },
+   "lora+ACE_playbook": {
+    "acc": 84.5,
+    "base_acc": 69.0,
+    "fixes_vs_base": 35,
+    "breaks_vs_base": 4,
+    "p_vs_base": 0.0,
+    "eval_file": "sft/runs/lora_r1_2667873/evalfin_2668076/eval_formula_lora_aceplaybook.json"
+   }
+  }
+ },
+ {
+  "name": "finer_ace_v1",
+  "task": "finer",
+  "file": "sft/data_v1/finer.jsonl",
+  "examples": 277,
+  "unique_items": 207,
+  "size_mb": 3.05,
+  "source": "as formula_ace_v1 (FiNER, only items with all 4 tags correct)",
+  "target": "full ACE JSON answer incl. bullet_ids",
+  "note": "superseded by v2",
+  "adapter": "sft/runs/lora_r1_2667873/adapter_finer",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 264,
+  "dev_rows": 13,
+  "train_tokens": 672950,
+  "target_tokens": 106626,
+  "steps": 42,
+  "dev_loss_first": 0.354,
+  "dev_loss_last": 0.211,
+  "train_loss_last": 0.242,
+  "train_minutes": 16.6,
+  "test": {
+   "lora_empty": {
+    "acc": 66.6,
+    "base_acc": 61.8,
+    "fixes_vs_base": 54,
+    "breaks_vs_base": 24,
+    "p_vs_base": 0.0009,
+    "eval_file": "sft/runs/lora_r1_2667873/evalfin_2668076/eval_finer_lora_empty.json"
+   }
+  }
+ },
+ {
+  "name": "appworld_ace_v1",
+  "task": "appworld",
+  "file": "sft/data_v1/appworld.jsonl",
+  "examples": 122,
+  "unique_items": 77,
+  "size_mb": 6.8,
+  "source": "ACE offline (+GT & noGT) adaptation trajectories on TRAIN tasks that pass the AppWorld evaluator; +GT retry turns dropped; learned playbook swapped for the shipped initial playbook",
+  "target": "multi-turn agent trajectory (loss on the model's own turns after the demo prefix)",
+  "note": "",
+  "adapter": "sft/runs/lora_r1_2667873/adapter_appworld",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 116,
+  "dev_rows": 6,
+  "train_tokens": 1512742,
+  "target_tokens": 170083,
+  "steps": 94,
+  "dev_loss_first": 0.205,
+  "dev_loss_last": 0.121,
+  "train_loss_last": 0.053,
+  "train_minutes": 48.9,
+  "test": {
+   "appworld": {
+    "test_normal": [
+     46.4,
+     26.8
+    ],
+    "test_challenge": [
+     29.0,
+     12.2
+    ],
+    "avg": 28.6
+   }
+  }
+ },
+ {
+  "name": "formula_ace_v2",
+  "task": "formula",
+  "file": "sft/data_v2/formula.jsonl",
+  "examples": 803,
+  "unique_items": 417,
+  "size_mb": 2.15,
+  "source": "= formula_ace_v1 with bullet_ids emptied",
+  "target": "ACE JSON answer (reasoning + final_answer, bullet_ids [])",
+  "note": "main ACE-distilled adapter",
+  "adapter": "sft/runs/lora_r2_fin_2668622/adapter_formula",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 763,
+  "dev_rows": 40,
+  "train_tokens": 466642,
+  "target_tokens": 168994,
+  "steps": 30,
+  "dev_loss_first": 0.342,
+  "dev_loss_last": 0.18,
+  "train_loss_last": 0.153,
+  "train_minutes": 15.7,
+  "test": {
+   "lora_empty": {
+    "acc": 75.0,
+    "base_acc": 69.0,
+    "fixes_vs_base": 22,
+    "breaks_vs_base": 10,
+    "p_vs_base": 0.0501,
+    "eval_file": "sft/runs/lora_r2_fin_2668622/eval_formula_lora_empty.json"
+   },
+   "lora+ACE_playbook": {
+    "acc": 86.5,
+    "base_acc": 69.0,
+    "fixes_vs_base": 38,
+    "breaks_vs_base": 3,
+    "p_vs_base": 0.0,
+    "eval_file": "sft/runs/lora_r2_fin_2668622/eval_formula_lora_aceplaybook.json"
+   }
+  }
+ },
+ {
+  "name": "finer_ace_v2",
+  "task": "finer",
+  "file": "sft/data_v2/finer.jsonl",
+  "examples": 277,
+  "unique_items": 207,
+  "size_mb": 3.03,
+  "source": "= finer_ace_v1 with bullet_ids emptied",
+  "target": "ACE JSON answer (bullet_ids [])",
+  "note": "main ACE-distilled adapter",
+  "adapter": "sft/runs/lora_r2_fin_2668622/adapter_finer",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 264,
+  "dev_rows": 13,
+  "train_tokens": 661302,
+  "target_tokens": 94978,
+  "steps": 42,
+  "dev_loss_first": 0.33,
+  "dev_loss_last": 0.194,
+  "train_loss_last": 0.228,
+  "train_minutes": 16.1,
+  "test": {
+   "lora_empty": {
+    "acc": 68.5,
+    "base_acc": 61.8,
+    "fixes_vs_base": 56,
+    "breaks_vs_base": 24,
+    "p_vs_base": 0.0005,
+    "eval_file": "sft/runs/lora_r2_fin_2668622/eval_finer_lora_empty.json"
+   }
+  }
+ },
+ {
+  "name": "formula_gold_all",
+  "task": "formula",
+  "file": "sft/runs/sft_baselines_2673885/data/formula_gold_all.jsonl",
+  "examples": 500,
+  "unique_items": 500,
+  "size_mb": 1.01,
+  "source": "gold labels of TRAIN items; all 500 train items",
+  "target": "answer only: {reasoning: '', bullet_ids: [], final_answer: gold}",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_formula_gold_all",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 475,
+  "dev_rows": 25,
+  "train_tokens": 198805,
+  "target_tokens": 12830,
+  "steps": 14,
+  "dev_loss_first": 1.165,
+  "dev_loss_last": 0.147,
+  "train_loss_last": 0.21,
+  "train_minutes": 10.2,
+  "test": {
+   "lora_empty": {
+    "acc": 50.0,
+    "base_acc": 69.0,
+    "fixes_vs_base": 10,
+    "breaks_vs_base": 48,
+    "p_vs_base": 0.0,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_formula_gold_all.json"
+   }
+  }
+ },
+ {
+  "name": "formula_gold_matched",
+  "task": "formula",
+  "file": "sft/runs/sft_baselines_2673885/data/formula_gold_matched.jsonl",
+  "examples": 417,
+  "unique_items": 417,
+  "size_mb": 0.84,
+  "source": "gold labels of TRAIN items; restricted to the train items of the ACE-distilled set",
+  "target": "answer only: {reasoning: '', bullet_ids: [], final_answer: gold}",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_formula_gold_matched",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 397,
+  "dev_rows": 20,
+  "train_tokens": 165443,
+  "target_tokens": 10657,
+  "steps": 12,
+  "dev_loss_first": 1.183,
+  "dev_loss_last": 0.147,
+  "train_loss_last": 0.058,
+  "train_minutes": 8.6,
+  "test": {
+   "lora_empty": {
+    "acc": 51.0,
+    "base_acc": 69.0,
+    "fixes_vs_base": 11,
+    "breaks_vs_base": 47,
+    "p_vs_base": 0.0,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_formula_gold_matched.json"
+   }
+  }
+ },
+ {
+  "name": "formula_self_all",
+  "task": "formula",
+  "file": "sft/runs/sft_baselines_2673885/data/formula_self_all.jsonl",
+  "examples": 344,
+  "unique_items": 344,
+  "size_mb": 0.85,
+  "source": "base model (no playbook, temp 0) answers on TRAIN items, correct only (rejection sampling); all correctly answered train items",
+  "target": "base model's own JSON answer (bullet_ids [])",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_formula_self_all",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 327,
+  "dev_rows": 17,
+  "train_tokens": 185397,
+  "target_tokens": 58020,
+  "steps": 12,
+  "dev_loss_first": 0.108,
+  "dev_loss_last": 0.048,
+  "train_loss_last": 0.056,
+  "train_minutes": 7.2,
+  "test": {
+   "lora_empty": {
+    "acc": 67.5,
+    "base_acc": 69.0,
+    "fixes_vs_base": 6,
+    "breaks_vs_base": 9,
+    "p_vs_base": 0.6072,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_formula_self_all.json"
+   }
+  }
+ },
+ {
+  "name": "formula_self_matched",
+  "task": "formula",
+  "file": "sft/runs/sft_baselines_2673885/data/formula_self_matched.jsonl",
+  "examples": 335,
+  "unique_items": 335,
+  "size_mb": 0.83,
+  "source": "base model (no playbook, temp 0) answers on TRAIN items, correct only (rejection sampling); restricted to the train items of the ACE-distilled set",
+  "target": "base model's own JSON answer (bullet_ids [])",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_formula_self_matched",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 319,
+  "dev_rows": 16,
+  "train_tokens": 180329,
+  "target_tokens": 56109,
+  "steps": 12,
+  "dev_loss_first": 0.102,
+  "dev_loss_last": 0.052,
+  "train_loss_last": 0.048,
+  "train_minutes": 7.1,
+  "test": {
+   "lora_empty": {
+    "acc": 65.5,
+    "base_acc": 69.0,
+    "fixes_vs_base": 4,
+    "breaks_vs_base": 11,
+    "p_vs_base": 0.1185,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_formula_self_matched.json"
+   }
+  }
+ },
+ {
+  "name": "finer_gold_all",
+  "task": "finer",
+  "file": "sft/runs/sft_baselines_2673885/data/finer_gold_all.jsonl",
+  "examples": 1000,
+  "unique_items": 1000,
+  "size_mb": 9.68,
+  "source": "gold labels of TRAIN items; all 1000 train items",
+  "target": "answer only: {reasoning: '', bullet_ids: [], final_answer: gold}",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_finer_gold_all",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 950,
+  "dev_rows": 50,
+  "train_tokens": 2090970,
+  "target_tokens": 59859,
+  "steps": 128,
+  "dev_loss_first": 0.469,
+  "dev_loss_last": 0.036,
+  "train_loss_last": 0.022,
+  "train_minutes": 51.4,
+  "test": {
+   "lora_empty": {
+    "acc": 73.8,
+    "base_acc": 61.8,
+    "fixes_vs_base": 100,
+    "breaks_vs_base": 26,
+    "p_vs_base": 0.0,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_finer_gold_all.json"
+   }
+  }
+ },
+ {
+  "name": "finer_gold_matched",
+  "task": "finer",
+  "file": "sft/runs/sft_baselines_2673885/data/finer_gold_matched.jsonl",
+  "examples": 207,
+  "unique_items": 207,
+  "size_mb": 2.01,
+  "source": "gold labels of TRAIN items; restricted to the train items of the ACE-distilled set",
+  "target": "answer only: {reasoning: '', bullet_ids: [], final_answer: gold}",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_finer_gold_matched",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 197,
+  "dev_rows": 10,
+  "train_tokens": 436382,
+  "target_tokens": 12585,
+  "steps": 28,
+  "dev_loss_first": 0.381,
+  "dev_loss_last": 0.036,
+  "train_loss_last": 0.019,
+  "train_minutes": 11.0,
+  "test": {
+   "lora_empty": {
+    "acc": 64.8,
+    "base_acc": 61.8,
+    "fixes_vs_base": 51,
+    "breaks_vs_base": 42,
+    "p_vs_base": 0.4069,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_finer_gold_matched.json"
+   }
+  }
+ },
+ {
+  "name": "finer_self_all",
+  "task": "finer",
+  "file": "sft/runs/sft_baselines_2673885/data/finer_self_all.jsonl",
+  "examples": 268,
+  "unique_items": 268,
+  "size_mb": 2.84,
+  "source": "base model (no playbook, temp 0) answers on TRAIN items, correct only (rejection sampling); all correctly answered train items",
+  "target": "base model's own JSON answer (bullet_ids [])",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_finer_self_all",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 255,
+  "dev_rows": 13,
+  "train_tokens": 618073,
+  "target_tokens": 70418,
+  "steps": 38,
+  "dev_loss_first": 0.156,
+  "dev_loss_last": 0.056,
+  "train_loss_last": 0.062,
+  "train_minutes": 14.5,
+  "test": {
+   "lora_empty": {
+    "acc": 64.1,
+    "base_acc": 61.8,
+    "fixes_vs_base": 26,
+    "breaks_vs_base": 18,
+    "p_vs_base": 0.2912,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_finer_self_all.json"
+   }
+  }
+ },
+ {
+  "name": "finer_self_matched",
+  "task": "finer",
+  "file": "sft/runs/sft_baselines_2673885/data/finer_self_matched.jsonl",
+  "examples": 100,
+  "unique_items": 100,
+  "size_mb": 1.05,
+  "source": "base model (no playbook, temp 0) answers on TRAIN items, correct only (rejection sampling); restricted to the train items of the ACE-distilled set",
+  "target": "base model's own JSON answer (bullet_ids [])",
+  "note": "SFT baseline (also LoRA)",
+  "adapter": "sft/runs/sft_baselines_2673885/adapter_finer_self_matched",
+  "adapter_exists": true,
+  "recipe": "LoRA r=16 alpha=32 dropout=0.05 on q,k,v,o,gate,up,down (134M params, 0.41%); lr 1e-4 cosine, 5% warmup; ~32k tokens/step; 2 epochs; 5% of rows held out (seed 42) for dev loss; loss on assistant tokens only; Qwen3-32B (YaRN x4 config), bf16",
+  "train_rows": 95,
+  "dev_rows": 5,
+  "train_tokens": 228962,
+  "target_tokens": 25988,
+  "steps": 14,
+  "dev_loss_first": 0.161,
+  "dev_loss_last": 0.065,
+  "train_loss_last": 0.062,
+  "train_minutes": 5.4,
+  "test": {
+   "lora_empty": {
+    "acc": 62.6,
+    "base_acc": 61.8,
+    "fixes_vs_base": 25,
+    "breaks_vs_base": 21,
+    "p_vs_base": 0.6587,
+    "eval_file": "sft/runs/sft_baselines_2673885/eval_finer_self_matched.json"
+   }
+  }
+ }
+]

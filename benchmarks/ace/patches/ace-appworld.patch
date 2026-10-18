@@ -1,0 +1,79 @@
+diff --git a/experiments/code/ace/__init__.py b/experiments/code/ace/__init__.py
+index ee4157c..55a68d2 100644
+--- a/experiments/code/ace/__init__.py
++++ b/experiments/code/ace/__init__.py
+@@ -2,12 +2,7 @@
+ from appworld_experiments.code.ace.base_agent import BaseAgent
+ from appworld_experiments.code.ace.evaluation_agent import Agent
+ from appworld_experiments.code.ace.adaptation_agent import StarAgent
+-from appworld_experiments.code.ace.full_code_reflexion import (
+-    SimplifiedFullCodeReflexionAgent,
+-)
+-from appworld_experiments.code.ace.base_full_code_reflexion import (
+-    BaseSimplifiedFullCodeReflexionAgent,
+-)
++# full_code_reflexion / base_full_code_reflexion imports removed: those modules are not in the released repo
+ from appworld_experiments.code.ace.ipfuncall import SimplifiedIPFunCallAgent
+ from appworld_experiments.code.ace.base_react import BaseSimplifiedReActAgent
+ from appworld_experiments.code.ace.evaluation_react import SimplifiedReActAgent
+diff --git a/experiments/code/ace/lite_llm_generator.py b/experiments/code/ace/lite_llm_generator.py
+index b758163..dc1a3fc 100644
+--- a/experiments/code/ace/lite_llm_generator.py
++++ b/experiments/code/ace/lite_llm_generator.py
+@@ -1,4 +1,5 @@
+ import inspect
++import re
+ import os
+ import time
+ import uuid
+@@ -152,6 +153,12 @@ def non_cached_chat_completion(
+     elif provider.strip().lower() == "openai":
+         from openai import OpenAI
+         client = OpenAI()
++    elif provider.strip().lower() == "local":
++        # Local OpenAI-compatible server (vLLM); thinking off to match the paper's non-thinking DeepSeek-V3.1
++        from openai import OpenAI
++        urls = os.environ.get("LOCAL_LLM_URL", "http://127.0.0.1:8000/v1").split(",")  # comma list: spread processes
++        client = OpenAI(api_key="EMPTY", base_url=urls[os.getpid() % len(urls)], timeout=1800)
++        kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": os.environ.get("LOCAL_ENABLE_THINKING", "0") == "1"}}
+     else:
+         raise ValueError(
+             f"Invalid provider: {provider}."
+@@ -325,6 +332,17 @@ class LiteLLMGenerator:
+                 break
+             except RETRY_ERROR as exception:
+                 success = False
++                # Prompt + max_tokens over the context window is not transient: shrink max_tokens to the remaining room,
++                # or end this call with empty content (same as the context-limit path above) instead of crashing the run.
++                if "maximum context length" in str(exception):
++                    # vLLM only reports a lower bound on the prompt size, so halve max_tokens until it fits.
++                    current = (self.generation_kwargs | kwargs).get("max_tokens") or 8192
++                    if current // 2 >= 256:
++                        print(f"Context overflow: retrying with max_tokens={current // 2}")
++                        kwargs = {**kwargs, "max_tokens": current // 2}
++                        continue
++                    print("WARNING: Ran out of context limit of this model; returning empty content.")
++                    return {"content": "", "tool_calls": [], "cost": 0}
+                 if self.retry_after_n_seconds is None:
+                     import traceback
+ 
+diff --git a/src/appworld/requester.py b/src/appworld/requester.py
+index 59ba26b..05ec58a 100644
+--- a/src/appworld/requester.py
++++ b/src/appworld/requester.py
+@@ -97,7 +97,14 @@ class RequestTracker:
+         return request_tracker
+ 
+     def save(self, file_path: str) -> None:
+-        requests = [jsonable_encoder(request) for request in self.requests]
++        requests = []
++        for request in self.requests:
++            try:
++                requests.append(jsonable_encoder(request))
++            except ValueError:
++                # Agent code can pass non-serializable values (e.g. Ellipsis) to an API; log them as repr
++                # instead of crashing the whole run. Only affects api_calls.jsonl, not task state or scoring.
++                requests.append(json.loads(json.dumps(request, default=repr)))
+         write_jsonl(requests, file_path, silent=True)
+ 
+ 

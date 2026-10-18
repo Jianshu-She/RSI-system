@@ -1,0 +1,622 @@
+diff --git a/WebArena/agents/legacy/dynamic_prompting.py b/WebArena/agents/legacy/dynamic_prompting.py
+index dc823da..57d317e 100644
+--- a/WebArena/agents/legacy/dynamic_prompting.py
++++ b/WebArena/agents/legacy/dynamic_prompting.py
+@@ -471,7 +471,10 @@ class ActionSpace(PromptElement):
+ """
+ 
+     def _parse_answer(self, text_answer):
+-        ans_dict = parse_html_tags_raise(text_answer, keys=["action"], merge_multiple=True)
++        # Read the action only after the reasoning: thinking models sometimes write the
++        # literal "<action>" inside <think>, which would otherwise be parsed as the action.
++        after_think = text_answer.rsplit("</think>", 1)[-1]
++        ans_dict = parse_html_tags_raise(after_think, keys=["action"], merge_multiple=True)
+ 
+         try:
+             # just check if action can be mapped to python code but keep action as is
+diff --git a/WebArena/agents/legacy/utils/chat_api.py b/WebArena/agents/legacy/utils/chat_api.py
+index 21e8157..f8d91b3 100644
+--- a/WebArena/agents/legacy/utils/chat_api.py
++++ b/WebArena/agents/legacy/utils/chat_api.py
+@@ -441,6 +441,8 @@ class HuggingFaceChatModel(SimpleChatModel):
+         default="",
+         description="The name of the model",
+     )
++    sampling_temperature: Optional[float] = Field(default=None)
++    sampling_max_tokens: Optional[int] = Field(default=None)
+ 
+     def __init__(
+         self,
+@@ -495,9 +497,11 @@ class HuggingFaceChatModel(SimpleChatModel):
+         else:
+             logging.info("Loading the LLM locally")
+ 
++            from utils.local_llm import AGENT_LLM_URL
+             llm_fn = OpenAI(
+-                base_url="http://localhost:8000/v1",
++                base_url=AGENT_LLM_URL,
+                 api_key="token-abc123",
++                timeout=1800,
+             )
+ 
+         super().__init__(
+@@ -505,6 +509,8 @@ class HuggingFaceChatModel(SimpleChatModel):
+             n_retry_server = n_retry_server,
+             model_name = model_name,
+             )
++        self.sampling_temperature = temperature
++        self.sampling_max_tokens = max_new_tokens
+ 
+     def _call(
+         self,
+@@ -530,8 +536,17 @@ class HuggingFaceChatModel(SimpleChatModel):
+                 response = self.llm.chat.completions.create(
+                     model=self.model_name,
+                     messages=messages_formated,
++                    temperature=self.sampling_temperature,
++                    max_tokens=self.sampling_max_tokens,
+                 )
+-                response = response.choices[0].message.content
++                msg = response.choices[0].message
++                response = msg.content or ""
++                # Local reproduction: the vLLM reasoning parser moves the model's
++                # <think> section into `reasoning`; put it back so history,
++                # self-judge and memory induction see the agent's thoughts.
++                reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
++                if reasoning and "<think>" not in response:
++                    response = f"<think>\n{reasoning.strip()}\n</think>\n{response.lstrip()}"
+                 return response
+             except Exception as e:
+                 if itr == self.n_retry_server - 1:
+diff --git a/WebArena/agents/legacy/utils/llm_utils.py b/WebArena/agents/legacy/utils/llm_utils.py
+index 3e18064..04bf265 100644
+--- a/WebArena/agents/legacy/utils/llm_utils.py
++++ b/WebArena/agents/legacy/utils/llm_utils.py
+@@ -12,6 +12,7 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import os
+ import collections
+ import json
+ from pathlib import Path
+@@ -191,6 +192,9 @@ def get_tokenizer(model_name="openai/gpt-4"):
+     if model_name.startswith("openai"):
+         return tiktoken.encoding_for_model(model_name.split("/")[-1])
+     else:
++        # Local reproduction: map the vLLM served name to its HF tokenizer.
++        if model_name == os.environ.get("AGENT_LLM_MODEL"):
++            model_name = os.environ.get("AGENT_TOKENIZER", model_name)
+         return AutoTokenizer.from_pretrained(model_name)
+ 
+ 
+diff --git a/WebArena/autoeval/clients.py b/WebArena/autoeval/clients.py
+index a1f10da..684723c 100644
+--- a/WebArena/autoeval/clients.py
++++ b/WebArena/autoeval/clients.py
+@@ -169,4 +169,8 @@ CLIENT_DICT = {
+     "gemini-2.5-flash": GEMINI_Client,
+     "gemini-2.5-pro": GEMINI_Client,
+     "claude-3-7-sonnet@20250219": CLAUDE_Client,
+-}
+\ No newline at end of file
++}
++
++from utils.local_llm import LOCAL_Client, AGENT_LLM_MODEL, STRONG_Client, GT_JUDGE_MODEL
++CLIENT_DICT[AGENT_LLM_MODEL] = LOCAL_Client
++CLIENT_DICT[GT_JUDGE_MODEL] = STRONG_Client
+diff --git a/WebArena/autoeval/cross_check.py b/WebArena/autoeval/cross_check.py
+new file mode 100644
+index 0000000..aabddf1
+--- /dev/null
++++ b/WebArena/autoeval/cross_check.py
+@@ -0,0 +1,44 @@
++"""Self-judge by cross-checking against an independent stronger agent's run of the same task (no GT used).
++Writes <model>_autoeval.json in the task dir (same format as evaluate_trajectory), so induce_memory works unchanged.
++Usage: python -m autoeval.cross_check --result_dir <run>/webarena.<tid> --ref_dir <ref_run> --model qwen3.5-397b
++"""
++import argparse
++import json
++import os
++import subprocess
++import sys
++
++TOOLS = os.path.join(os.environ["EVAL_ROOT"], "tools")
++sys.path.insert(0, TOOLS)
++from verify_cross import PROMPT, outcome  # noqa: E402
++from utils.local_llm import chat, GT_JUDGE_URL, GT_JUDGE_MODEL  # noqa: E402
++
++
++def audit_one(task_dir):
++    """audit_answers.py row (intent, final answer, final URL, ...) for a single task dir."""
++    out = subprocess.run([sys.executable, os.path.join(TOOLS, "audit_answers.py"), os.path.dirname(task_dir)],
++                         capture_output=True, text=True, check=True).stdout
++    tid = int(task_dir.rstrip("/").split(".")[-1])
++    return next(r for r in map(json.loads, out.splitlines()) if r["tid"] == tid)
++
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--result_dir", required=True)
++    ap.add_argument("--ref_dir", required=True)
++    ap.add_argument("--model", required=True)
++    a = ap.parse_args()
++    tid = a.result_dir.rstrip("/").split(".")[-1]
++    ref_task = os.path.join(a.ref_dir, f"webarena.{tid}")
++    r = audit_one(a.result_dir)
++    rm, thoughts = None, "No reference run available."
++    if os.path.exists(os.path.join(ref_task, "summary_info.json")):
++        q = audit_one(ref_task)
++        (ans_a, url_a), (ans_b, url_b) = outcome(r), outcome(q)
++        txt, _ = chat([{"role": "user", "content": PROMPT.format(intent=r["intent"], a=ans_a, ua=url_a, b=ans_b, ub=url_b)}],
++                      base_url=GT_JUDGE_URL, model=GT_JUDGE_MODEL, temperature=0.0, enable_thinking=False)
++        rm = "SAME" in txt.upper() and "DIFFERENT" not in txt.upper()
++        thoughts = (f"An independent agent solving the same task {'reached the same' if rm else 'reached a different'} outcome. "
++                    f"Its answer: {ans_b[:1500]} (final page: {url_b}). This agent's answer: {ans_a[:1500]} (final page: {url_a}).")
++    json.dump([{"idx": tid, "gt": None, "rm": rm, "thoughts": thoughts, "uid": tid}],
++              open(os.path.join(a.result_dir, f"{a.model}_autoeval.json"), "w"))
+diff --git a/WebArena/autoeval/evaluate_trajectory.py b/WebArena/autoeval/evaluate_trajectory.py
+index ae52505..e5f7559 100644
+--- a/WebArena/autoeval/evaluate_trajectory.py
++++ b/WebArena/autoeval/evaluate_trajectory.py
+@@ -19,6 +19,7 @@ import gzip
+ import pickle
+ import json
+ import argparse
++import ast
+ import traceback
+ from autoeval.evaluator import Evaluator
+ from autoeval.clients import CLIENT_DICT
+@@ -68,17 +69,33 @@ def extract_think_and_action(folder: str) -> tuple[list[str], list[str], list[st
+             obs_list.append(axtree)
+         except Exception:
+             continue
++    # The observation stored with step k is the page *before* action k, so the page after the
++    # final action lives in the last step file (which has no action). Add it as the final state.
++    if step_files and obs_list:
++        try:
++            with gzip.open(os.path.join(folder, step_files[-1]), 'rb') as fh:
++                last = pickle.load(fh)
++            if not last.agent_info.get("action") and isinstance(last.obs, dict):
++                obs_list[-1] = last.obs.get("axtree_txt", "") or obs_list[-1]
++        except Exception:
++            pass
+     return think_list, action_list, obs_list
+ 
+ def extract_response(action):
+-    s, e = action.index("(")+1, action.index(")")
+-    return action[s: e]
++    """Full text of the send_msg_to_user(...) argument (the original cut at the first ')')."""
++    i = action.rfind("send_msg_to_user(")
++    if i < 0:
++        return ""
++    arg = action[i + len("send_msg_to_user("):].rstrip()
++    try:
++        return str(ast.literal_eval(ast.parse("f(" + arg, mode="eval").body.args[0]))
++    except Exception:
++        return arg[:-1] if arg.endswith(")") else arg
+ 
+ 
+ def process_sample(
+     idx, traj_info, log_save_path,
+-    model, eval_version,
+-):
++    model, eval_version):
+     clients = {model: CLIENT_DICT[model](model_name=model)}
+     evaluator = Evaluator(clients, log_save_path=log_save_path + "/trajs")
+     try:
+@@ -114,7 +131,7 @@ def main():
+     # load trajectory from pkl step files
+     think_list, action_list, obs_list = extract_think_and_action(args.result_dir)
+     actions = [act for act in action_list]
+-    if action_list and "send_msg_to_user" in action_list[-1]:
++    if action_list and "send_msg_to_user(" in action_list[-1]:
+         response = extract_response(action_list[-1])
+     else:
+         response = ""
+@@ -158,8 +175,7 @@ def main():
+     eval_info = process_sample(
+         idx=config["task_id"], traj_info=traj_info,
+         log_save_path=log_save_path,
+-        model=args.model, eval_version=args.prompt,
+-    )
++        model=args.model, eval_version=args.prompt)
+     output_eval_path = os.path.join(args.result_dir, f"{args.model}_autoeval.json")
+     json.dump(eval_info, open(output_eval_path, 'w'))
+ 
+@@ -169,8 +185,7 @@ if __name__ == "__main__":
+     parser.add_argument("--result_dir", type=str, required=True,
+                         help="Path to the result directory, e.g., 'webarena.0'.")
+     # autoeval
+-    parser.add_argument("--model", type=str, default="gemini-2.5-flash",
+-                        choices=['gemini-2.5-flash', 'claude-3-7-sonnet@20250219', 'gemini-2.5-pro', "google/gemma-3-12b-it"])
++    parser.add_argument("--model", type=str, default="gemini-2.5-flash")
+     parser.add_argument("--prompt", type=str, default="text",
+                         choices=["text", "vision"])
+     parser.add_argument("--log_dir", type=str, default=None,
+diff --git a/WebArena/induce_memory.py b/WebArena/induce_memory.py
+index 7dd8bc4..51daf79 100644
+--- a/WebArena/induce_memory.py
++++ b/WebArena/induce_memory.py
+@@ -193,8 +193,7 @@ if __name__ == "__main__":
+     parser.add_argument("--output_path", type=str, default=None, required=True,
+                         help="Path to the output file.")
+     parser.add_argument("--criteria", type=str, default="autoeval", choices=["gt", "autoeval"])
+-    parser.add_argument("--model", type=str, default="gemini-2.5-flash",
+-                        choices=["gpt-3.5", "gpt-4", "gpt-4o", "gemini-2.5-flash"])
++    parser.add_argument("--model", type=str, default="gemini-2.5-flash")
+     parser.add_argument("--task", type=str, default="webarena.47")
+     parser.add_argument("--memory_mode", type=str, default="reasoningbank")
+     args = parser.parse_args()
+diff --git a/WebArena/induce_scaling.py b/WebArena/induce_scaling.py
+index 4863b21..09f41ea 100644
+--- a/WebArena/induce_scaling.py
++++ b/WebArena/induce_scaling.py
+@@ -214,8 +214,7 @@ if __name__ == "__main__":
+     parser.add_argument("--criteria", type=str, default="gt", 
+                         choices=["gt", "autoeval"],
+                         help="'gt': only use examples with gold reward, 'autoeval': use examples with autoeval reward.")
+-    parser.add_argument("--model", type=str, default="gemini-2.5-flash",
+-                        choices=["gpt-3.5", "gpt-4", "gpt-4o", "gemini-2.5-flash"])
++    parser.add_argument("--model", type=str, default="gemini-2.5-flash")
+     parser.add_argument("--task", type=str, default="webarena.21")
+     parser.add_argument("--num_samples", type=int, default=1, help="samples per task")
+     args = parser.parse_args()
+diff --git a/WebArena/memory_management.py b/WebArena/memory_management.py
+index cb852c8..413da23 100644
+--- a/WebArena/memory_management.py
++++ b/WebArena/memory_management.py
+@@ -28,14 +28,9 @@ from torch import Tensor
+ from transformers import AutoTokenizer, AutoModel
+ import logging
+ logger = logging.getLogger(__name__)
+-from google import genai
+-from google.genai.types import EmbedContentConfig
+-import vertexai
+-from vertexai.language_models import TextEmbeddingInput, TextEmbeddingModel
+-# TextEmbeddingModel requires a regional endpoint; "global" doesn't work.
+-vertexai.init(project=os.environ.get("GOOGLE_CLOUD_PROJECT"),
+-              location="us-central1")
+-client = genai.Client(vertexai=True)
++# Local reproduction: gemini-embedding-001 (Vertex AI) is replaced by
++# Qwen3-Embedding-8B served with vLLM (see utils/local_llm.py).
++from utils.local_llm import embed as local_embed
+ 
+ 
+ def get_embeddings(texts: list) -> list:
+@@ -76,17 +71,9 @@ def embed_query_with_qwen(query: str) -> Tuple[torch.Tensor, str, int]:
+ 
+ 
+ def embed_query_with_gemini(query: str, dimensionality: int = 3072) -> Tuple[torch.Tensor, str, int]:
+-    """Returns (1, D) torch tensor (on CPU), model_name, dim."""
+-
+-    model_name = "gemini-embedding-001"
+-    model = TextEmbeddingModel.from_pretrained(model_name)
+-    text_input = TextEmbeddingInput(query, "RETRIEVAL_DOCUMENT")
+-
+-    resp = model.get_embeddings([text_input], output_dimensionality=dimensionality)
+-
+-    # vertexai returns a list of TextEmbedding objects with .values
+-    vec = torch.tensor([resp[0].values], dtype=torch.float32)  # (1, D)
+-
++    """Returns (1, D) torch tensor (on CPU). Name kept for call-site compatibility;
++    backed by the local Qwen3-Embedding-8B server."""
++    vec = torch.tensor([local_embed([query])[0]], dtype=torch.float32)  # (1, D)
+     return vec
+ 
+ 
+diff --git a/WebArena/pipeline_memory.py b/WebArena/pipeline_memory.py
+index cb9b902..27390ea 100644
+--- a/WebArena/pipeline_memory.py
++++ b/WebArena/pipeline_memory.py
+@@ -38,6 +38,15 @@ def main():
+         config_flags = [config["sites"] == [args.website] for config in config_list]
+     task_ids = [config["task_id"] for config, flag in zip(config_list, config_flags) if flag]
+     # random.shuffle(task_ids)
++    memory_dir = args.memory_dir or os.path.join(args.output_dir, "memory")
++    os.makedirs(memory_dir, exist_ok=True)
++    if args.task_ids_file:
++        keep = {int(x) for x in open(args.task_ids_file).read().split()}
++        task_ids = [t for t in task_ids if int(t) in keep]
++    # resume: skip tasks that already have a finished result
++    if args.skip_done:
++        task_ids = [t for t in task_ids
++                    if not os.path.exists(os.path.join(args.output_dir, f"webarena.{t}", "summary_info.json"))]
+ 
+     if args.end_index == None: 
+         args.end_index = len(task_ids)
+@@ -57,17 +66,25 @@ def main():
+             "--results_path", f"{args.output_dir}",
+         ]
+         if args.memory_mode != "no_memory":
+-            run_cmd += ["--memory_path", f"memories_{args.memory_mode}/{args.website}.txt"]
++            run_cmd += ["--memory_path", os.path.join(memory_dir, f"{args.website}.txt")]
+         process = Popen(run_cmd)
+         process.wait()
+ 
+-        # step 2: run evaluation
+-        process = Popen([
+-            "python", "-m", "autoeval.evaluate_trajectory",
+-            "--result_dir", f"{args.output_dir}/webarena.{tid}",
+-            "--model", args.model,
+-            "--log_dir", f"autoeval/logs_{args.memory_mode}_{args.website}",
+-        ])
++        # step 2: run evaluation (or cross-check against an independent reference agent run)
++        if args.cross_ref:
++            process = Popen([
++                "python", "-m", "autoeval.cross_check",
++                "--result_dir", f"{args.output_dir}/webarena.{tid}",
++                "--ref_dir", args.cross_ref,
++                "--model", args.judge_model or args.model,
++            ])
++        else:
++            process = Popen([
++                "python", "-m", "autoeval.evaluate_trajectory",
++                "--result_dir", f"{args.output_dir}/webarena.{tid}",
++                "--model", args.judge_model or args.model,
++                "--log_dir", os.path.join(args.output_dir, "autoeval_logs"),
++            ])
+         process.wait()
+ 
+         if args.memory_mode == "no_memory":
+@@ -80,8 +97,8 @@ def main():
+             "--task", f"webarena.{tid}",
+             "--criteria", args.judge,
+             "--memory_mode", args.memory_mode,
+-            "--model", args.model,
+-            "--output_path", f"memories_{args.memory_mode}/{args.website}.jsonl"
++            "--model", args.judge_model or args.model,
++            "--output_path", os.path.join(memory_dir, f"{args.website}.jsonl")
+         ])
+         process.wait()
+ 
+@@ -93,12 +110,21 @@ if __name__ == "__main__":
+     parser.add_argument("--start_index", type=int, default=0)
+     parser.add_argument("--end_index", type=int, default=None)
+     parser.add_argument("--output_dir", type=str, default=None)
+-    parser.add_argument("--model", type=str, default="gemini-2.5-flash",
+-                        choices=["gemini-2.5-flash", "claude-3-7-sonnet@20250219", "gemini-2.5-pro", "google/gemma-3-12b-it"])
++    parser.add_argument("--model", type=str, default="gemini-2.5-flash")
+     parser.add_argument("--prev_id", type=int, default=-1)
+     parser.add_argument("--memory_mode", type=str, default="reasoningbank",
+                         choices=["no_memory", "reasoningbank", "awm", "synapse"])
+     parser.add_argument("--judge", type=str, default="autoeval")
++    parser.add_argument("--judge_model", type=str, default=None,
++                        help="Model for self-judge and memory induction (default: the backbone).")
++    parser.add_argument("--memory_dir", type=str, default=None,
++                        help="Where this run's memory bank lives (default: <output_dir>/memory). Pass an existing bank to start from it.")
++    parser.add_argument("--task_ids_file", type=str, default=None,
++                        help="Whitespace-separated task ids to run (e.g. splits/test_ids.txt); default: all tasks of --website.")
++    parser.add_argument("--skip_done", action="store_true",
++                        help="Skip tasks whose summary_info.json already exists in --output_dir (for resuming).")
++    parser.add_argument("--cross_ref", type=str, default=None,
++                        help="Run dir of an independent reference agent; judge = agreement with it.")
+     args = parser.parse_args()
+ 
+     main()
+diff --git a/WebArena/pipeline_scaling.py b/WebArena/pipeline_scaling.py
+index c75d996..933a74e 100644
+--- a/WebArena/pipeline_scaling.py
++++ b/WebArena/pipeline_scaling.py
+@@ -87,8 +87,7 @@ if __name__ == "__main__":
+     parser.add_argument("--num_trials", type=int, default=1,
+                         help="Number of trials to run for each task.")
+     parser.add_argument("--prev_id", type=int, default=-1)
+-    parser.add_argument("--model", type=str, default="gemini-2.5-flash",
+-                        choices=["gpt-3.5", "gpt-4", "gpt-4o", "gemini-2.5-flash", "gemini-2.5-pro"])
++    parser.add_argument("--model", type=str, default="gemini-2.5-flash")
+     parser.add_argument("--output_dir", type=str, default="./results",
+                         help="Directory to save the results.")
+     parser.add_argument("--start_port", type=int, default=8010,
+diff --git a/WebArena/run.py b/WebArena/run.py
+index e893166..632083a 100644
+--- a/WebArena/run.py
++++ b/WebArena/run.py
+@@ -163,13 +163,13 @@ def main():
+ 
+         # Agent with memory retrieval
+ 
+-        website = args.memory_path.split("/")[-1].split(".")[0]
+-        mem_partial_path = args.memory_path.split("/")[0]
++        website = os.path.basename(args.memory_path).split(".")[0]
++        mem_partial_path = os.path.dirname(os.path.abspath(args.memory_path))
+ 
+-        if not os.path.exists(f"./{mem_partial_path}/{website}.jsonl"):
+-            open(f"./{mem_partial_path}/{website}.jsonl", "w").close()
++        if not os.path.exists(f"{mem_partial_path}/{website}.jsonl"):
++            open(f"{mem_partial_path}/{website}.jsonl", "w").close()
+ 
+-        with open(f"./{mem_partial_path}/{website}.jsonl", "r") as f:
++        with open(f"{mem_partial_path}/{website}.jsonl", "r") as f:
+             reasoning_bank = [json.loads(line) for line in f.readlines()]
+ 
+         cur_query = json.load(open(f"./config_files/{args.task_name.split('.')[-1]}.json"))["intent"]
+@@ -178,7 +178,7 @@ def main():
+                             reasoning_bank=reasoning_bank,
+                             cur_query=cur_query,
+                             task_id=args.task_name.split('.')[-1],
+-                            cache_path=f"./{mem_partial_path}/{website}_embeddings.jsonl",
++                            cache_path=f"{mem_partial_path}/{website}_embeddings.jsonl",
+                             prefer_model="gemini")
+ 
+         if not res:
+@@ -213,7 +213,7 @@ def main():
+                 temperature=0.7,
+                 max_total_tokens=128_000,  # "Maximum total tokens for the chat model."
+                 max_input_tokens=126_000,  # "Maximum tokens for the input to the chat model."
+-                max_new_tokens=65_536,  # "Maximum total tokens for the chat model."
++                max_new_tokens=int(os.environ.get("AGENT_MAX_NEW_TOKENS", 65_536)),  # per-step generation cap (eval_pipeline: env AGENT_MAX_NEW_TOKENS)
+             ),
+             flags=Flags(
+                 use_html=args.use_html,
+diff --git a/WebArena/utils/clients.py b/WebArena/utils/clients.py
+index 4104684..4e67301 100644
+--- a/WebArena/utils/clients.py
++++ b/WebArena/utils/clients.py
+@@ -163,4 +163,8 @@ CLIENT_DICT = {
+     "gemini-2.5-flash": GEMINI_Client,
+     "gemini-2.5-pro": GEMINI_Client,
+     "claude-3-7-sonnet@20250219": CLAUDE_Client,
+-}
+\ No newline at end of file
++}
++
++from utils.local_llm import LOCAL_Client, AGENT_LLM_MODEL, STRONG_Client, GT_JUDGE_MODEL
++CLIENT_DICT[AGENT_LLM_MODEL] = LOCAL_Client
++CLIENT_DICT[GT_JUDGE_MODEL] = STRONG_Client
+diff --git a/WebArena/utils/local_llm.py b/WebArena/utils/local_llm.py
+new file mode 100644
+index 0000000..8b1f0b2
+--- /dev/null
++++ b/WebArena/utils/local_llm.py
+@@ -0,0 +1,79 @@
++# Local (vLLM, OpenAI-compatible) replacements for the Vertex AI endpoints used
++# in the original release. Endpoints are configured through environment vars:
++#   AGENT_LLM_URL / AGENT_LLM_MODEL  - backbone (agent, self-judge, memory induction)
++#   EMBED_URL     / EMBED_MODEL      - memory retrieval embedding
++#   GT_JUDGE_URL  / GT_JUDGE_MODEL   - llm_fuzzy_match / llm_ua_match in the GT evaluator
++import os
++import time
++
++from openai import OpenAI
++
++AGENT_LLM_URL = os.environ.get("AGENT_LLM_URL", "http://127.0.0.1:8000/v1")
++AGENT_LLM_MODEL = os.environ.get("AGENT_LLM_MODEL", "qwen3.8-27b")
++EMBED_URL = os.environ.get("EMBED_URL", "http://127.0.0.1:8001/v1")
++EMBED_MODEL = os.environ.get("EMBED_MODEL", "qwen3-embedding-8b")
++GT_JUDGE_URL = os.environ.get("GT_JUDGE_URL", "http://127.0.0.1:8002/v1")
++GT_JUDGE_MODEL = os.environ.get("GT_JUDGE_MODEL", "qwen3.5-397b")
++
++LOCAL_MODELS = {AGENT_LLM_MODEL}
++
++
++def chat(messages, base_url=AGENT_LLM_URL, model=AGENT_LLM_MODEL, temperature=None,
++         max_tokens=None, enable_thinking=True, n_retry=5):
++    client = OpenAI(base_url=base_url, api_key="EMPTY", timeout=1800)
++    kwargs = {}
++    if temperature is not None:
++        kwargs["temperature"] = temperature
++    if max_tokens is not None:
++        kwargs["max_tokens"] = max_tokens
++    for i in range(n_retry):
++        try:
++            resp = client.chat.completions.create(
++                model=model,
++                messages=messages,
++                extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
++                **kwargs,
++            )
++            return resp.choices[0].message.content or "", resp
++        except Exception:
++            if i == n_retry - 1:
++                raise
++            time.sleep(5 * (i + 1))
++
++
++def embed(texts):
++    client = OpenAI(base_url=EMBED_URL, api_key="EMPTY", timeout=600)
++    resp = client.embeddings.create(model=EMBED_MODEL, input=texts)
++    return [d.embedding for d in resp.data]
++
++
++class LOCAL_Client:
++    """Drop-in for GEMINI_Client in utils/clients.py and autoeval/clients.py."""
++
++    def __init__(self, model_name: str = AGENT_LLM_MODEL, temperature: float = 0.0):
++        self.model_name = model_name
++        self.temperature = temperature
++
++    def chat(self, messages, json_mode: bool = False, temperature: float = None):
++        t = self.temperature if temperature is None else temperature
++        # same per-step cap as the agent (AGENT_MAX_NEW_TOKENS); a looping model would otherwise generate until the context is full
++        cap = os.environ.get("AGENT_MAX_NEW_TOKENS")
++        return chat(messages, model=self.model_name, temperature=t, max_tokens=int(cap) if cap else None)
++
++    def one_step_chat(self, text, system_msg: str = None, json_mode=False, temperature: float = None):
++        messages = []
++        if system_msg is not None:
++            messages.append({"role": "system", "content": system_msg})
++        messages.append({"role": "user", "content": text})
++        return self.chat(messages, json_mode=json_mode, temperature=temperature)
++
++
++class STRONG_Client(LOCAL_Client):
++    """Stronger model (GT_JUDGE_URL) used as self-judge and memory inducer instead of the backbone."""
++
++    def __init__(self, model_name: str = GT_JUDGE_MODEL, temperature: float = 0.0):
++        super().__init__(model_name=model_name, temperature=temperature)
++
++    def chat(self, messages, json_mode: bool = False, temperature: float = None):
++        t = self.temperature if temperature is None else temperature
++        return chat(messages, base_url=GT_JUDGE_URL, model=self.model_name, temperature=t)
+diff --git a/third_party/webarena/evaluation_harness/helper_functions.py b/third_party/webarena/evaluation_harness/helper_functions.py
+index 4c2c336..656e9b0 100644
+--- a/third_party/webarena/evaluation_harness/helper_functions.py
++++ b/third_party/webarena/evaluation_harness/helper_functions.py
+@@ -24,9 +24,31 @@ try:
+ except ImportError:
+     pass
+ 
+-from google import genai
+-from google.genai.types import HttpOptions, GenerateContentConfig
+-client = genai.Client(http_options=HttpOptions(api_version="v1"))
++# Local reproduction: the gemini-2.5-pro grader is replaced by a local
++# OpenAI-compatible judge (GT_JUDGE_URL / GT_JUDGE_MODEL), thinking disabled.
++import os as _os
++import time as _time
++from openai import OpenAI as _OpenAI
++
++
++def _gt_judge(message: str) -> str:
++    _client = _OpenAI(base_url=_os.environ.get("GT_JUDGE_URL", "http://127.0.0.1:8002/v1"),
++                      api_key="EMPTY", timeout=600)
++    # Wait up to ~40 min for the grader (e.g. across a server restart) instead of failing the task.
++    for _i in range(80):
++        try:
++            resp = _client.chat.completions.create(
++                model=_os.environ.get("GT_JUDGE_MODEL", "qwen3.5-397b"),
++                messages=[{"role": "user", "content": message}],
++                temperature=0,
++                max_tokens=768,
++                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
++            )
++            return resp.choices[0].message.content or ""
++        except Exception:
++            if _i == 79:
++                raise
++            _time.sleep(30)
+ 
+ 
+ def shopping_get_auth_token() -> str:
+@@ -177,14 +199,7 @@ def llm_fuzzy_match(pred: str, reference: str, question: str) -> float:
+     #     context_length=0,
+     # ).lower()
+ 
+-    response = client.models.generate_content(
+-        model="gemini-2.5-pro",
+-        contents=message,
+-        config=GenerateContentConfig(
+-            temperature=0,
+-            max_output_tokens=768,
+-        )
+-    ).text.lower()
++    response = _gt_judge(message).lower()
+ 
+     if "partially correct" in response or "incorrect" in response:
+         return 0.0
+@@ -222,14 +237,7 @@ def llm_ua_match(pred: str, reference: str, question: str) -> float:
+     #     context_length=0,
+     # ).lower()
+ 
+-    response = client.models.generate_content(
+-        model="gemini-2.5-pro",
+-        contents=message,
+-        config=GenerateContentConfig(
+-            temperature=0,
+-            max_output_tokens=768,
+-        )
+-    ).text.lower()
++    response = _gt_judge(message).lower()
+ 
+     if "different" in response:
+         return 0.0

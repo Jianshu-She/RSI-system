@@ -1,0 +1,61 @@
+diff --git a/eval/finance/run.py b/eval/finance/run.py
+index 0aa808b..0913f2b 100644
+--- a/eval/finance/run.py
++++ b/eval/finance/run.py
+@@ -30,7 +30,7 @@ def parse_args():
+     
+     # Model configuration
+     parser.add_argument("--api_provider", type=str, default="sambanova",
+-                        choices=["sambanova", "together", "openai", "commonstack"], help="API provider")
++                        choices=["sambanova", "together", "openai", "commonstack", "local"], help="API provider")
+     parser.add_argument("--generator_model", type=str, 
+                         default="DeepSeek-V3.1",
+                         help="Model for generator")
+diff --git a/llm.py b/llm.py
+index b6483f6..0ac94a6 100644
+--- a/llm.py
++++ b/llm.py
+@@ -6,6 +6,7 @@ llm.py
+ This file contains the LLM class for the project.
+ 
+ """
++import os
+ import time
+ import random
+ from datetime import datetime
+@@ -71,6 +72,11 @@ def timed_llm_call(client, api_provider, model, prompt, role, call_id, max_token
+                 max_tokens_key: max_tokens
+             }
+             
++            # Local vLLM: thinking off by default to match the paper's non-thinking DeepSeek-V3.1
++            if api_provider == "local":
++                enable_thinking = os.getenv("LOCAL_ENABLE_THINKING", "0") == "1"
++                api_params["extra_body"] = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
++
+             # Add JSON mode if requested
+             if use_json_mode:
+                 api_params["response_format"] = {"type": "json_object"}
+diff --git a/utils.py b/utils.py
+index d07a4e7..2759089 100644
+--- a/utils.py
++++ b/utils.py
+@@ -37,9 +37,18 @@ def initialize_clients(api_provider):
+         api_key = os.getenv('COMMONSTACK_API_KEY', '')
+         if not api_key:
+             raise ValueError("Commonstack api key not found in environment variables")
++    elif api_provider == "local":
++        # Local OpenAI-compatible server (e.g. vLLM); LOCAL_LLM_URL may list several comma-separated replicas
++        urls = os.getenv('LOCAL_LLM_URL', 'http://127.0.0.1:8000/v1').split(',')
++        api_key = os.getenv('LOCAL_LLM_API_KEY', 'EMPTY')
++        gen_url, ref_url, cur_url = (urls * 3)[:3]
++        print(f"Using local API: generator={gen_url} reflector={ref_url} curator={cur_url}")
++        return (openai.OpenAI(api_key=api_key, base_url=gen_url, timeout=1800),
++                openai.OpenAI(api_key=api_key, base_url=ref_url, timeout=1800),
++                openai.OpenAI(api_key=api_key, base_url=cur_url, timeout=1800))
+     else:
+         raise ValueError(
+-            f"Invalid api_provider name: {api_provider}. Must be 'sambanova', 'together', 'openai', or 'commonstack'"
++            f"Invalid api_provider name: {api_provider}. Must be 'sambanova', 'together', 'openai', 'commonstack', or 'local'"
+         )
+         
+     generator_client = openai.OpenAI(api_key=api_key, base_url=base_url)

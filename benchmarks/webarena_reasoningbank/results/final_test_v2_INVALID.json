@@ -1,0 +1,104 @@
+{
+ "runs": [
+  {
+   "run": "test_base_q32",
+   "done": 86,
+   "expected": 86,
+   "success_rate": 16.27906976744186,
+   "avg_steps": 13.63953488372093,
+   "avg_steps_success": 3.142857142857143,
+   "errors": 0,
+   "self_judge_acc": 68.6046511627907
+  },
+  {
+   "run": "test_lora_v2",
+   "done": 86,
+   "expected": 86,
+   "success_rate": 10.465116279069768,
+   "avg_steps": 11.581395348837209,
+   "avg_steps_success": 4.888888888888889,
+   "errors": 0,
+   "self_judge_acc": 63.95348837209303
+  },
+  {
+   "run": "test_lora_s36",
+   "done": 86,
+   "expected": 86,
+   "success_rate": 16.27906976744186,
+   "avg_steps": 15.80232558139535,
+   "avg_steps_success": 6.714285714285714,
+   "errors": 1,
+   "self_judge_acc": 75.5813953488372
+  },
+  {
+   "run": "test_lora_final",
+   "done": 86,
+   "expected": 86,
+   "success_rate": 12.790697674418604,
+   "avg_steps": 15.127906976744185,
+   "avg_steps_success": 4.454545454545454,
+   "errors": 0,
+   "self_judge_acc": 74.4186046511628
+  },
+  {
+   "run": "shop_rb_q32",
+   "done": 86,
+   "expected": 86,
+   "success_rate": 20.930232558139537,
+   "avg_steps": 14.837209302325581,
+   "avg_steps_success": 5.444444444444445,
+   "errors": 1,
+   "self_judge_acc": 69.76744186046511
+  }
+ ],
+ "paired": [
+  {
+   "run": "test_lora_v2",
+   "shared": 86,
+   "baseline_sr": 16.27906976744186,
+   "run_sr": 10.465116279069768,
+   "delta": -5.813953488372093,
+   "wins": 4,
+   "losses": 9,
+   "p_one_sided": 0.953857421875,
+   "baseline_steps": 13.63953488372093,
+   "run_steps": 11.581395348837209
+  },
+  {
+   "run": "test_lora_s36",
+   "shared": 86,
+   "baseline_sr": 16.27906976744186,
+   "run_sr": 16.27906976744186,
+   "delta": 0.0,
+   "wins": 4,
+   "losses": 4,
+   "p_one_sided": 0.63671875,
+   "baseline_steps": 13.63953488372093,
+   "run_steps": 15.80232558139535
+  },
+  {
+   "run": "test_lora_final",
+   "shared": 86,
+   "baseline_sr": 16.27906976744186,
+   "run_sr": 12.790697674418604,
+   "delta": -3.4883720930232567,
+   "wins": 3,
+   "losses": 6,
+   "p_one_sided": 0.91015625,
+   "baseline_steps": 13.63953488372093,
+   "run_steps": 15.127906976744185
+  },
+  {
+   "run": "shop_rb_q32",
+   "shared": 86,
+   "baseline_sr": 16.27906976744186,
+   "run_sr": 20.930232558139537,
+   "delta": 4.651162790697676,
+   "wins": 9,
+   "losses": 5,
+   "p_one_sided": 0.21197509765625,
+   "baseline_steps": 13.63953488372093,
+   "run_steps": 14.837209302325581
+  }
+ ]
+}

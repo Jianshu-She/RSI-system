@@ -1,0 +1,13 @@
+# large artifacts live outside git (set WA_WORK / ACE_* to a shared filesystem)
+work/
+**/work/
+*.sqsh
+runs/
+ckpt/
+logs/
+*.log
+__pycache__/
+*.pyc
+.venv*/
+*.jsonl
+!**/splits/*.jsonl

@@ -1,0 +1,8 @@
+# LoRA training env (tested: CUDA 12.8 wheels on H200). Install torch from the CUDA index first:
+#   uv venv .venv-train --python 3.12 && VIRTUAL_ENV=.venv-train uv pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+#   VIRTUAL_ENV=.venv-train uv pip install -r rsi/finetune/requirements-train.txt
+transformers==4.57.6
+peft==0.17.1
+accelerate==1.10.1
+safetensors
+sentencepiece
