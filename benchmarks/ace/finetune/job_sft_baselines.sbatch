@@ -18,7 +18,7 @@ RUN=$ACE_SFT_DIR/runs/sft_baselines_${SLURM_JOB_ID}
 PY=$TRAIN_PY
 VLLM=$VLLM_BIN
 MODEL=$MODEL_DIR
-EMPTY=$ACE_ROOT/eval/empty_context.txt
+EMPTY=$ACE_ROOT/../../deltaserve/configs/empty_context.txt
 mkdir -p $RUN/logs
 export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
 echo "=== $(date '+%F %T') node $(hostname) job $SLURM_JOB_ID"

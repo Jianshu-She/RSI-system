@@ -7,9 +7,10 @@
 >
 > Qwen3-32B（YaRN），4×H200 上的结果：Formula test 从 68.0 提到 **75.0**（p=0.009），与离线完整 LoRA 持平。
 > 训练只用了 4.6 分钟，期间推理 TTFT SLO 达标率 96.6%。用本目录脚本重新跑一遍得到 74.5 vs 66.5（p=0.007），SLO 达标率 99.1%。
-> 一条命令复现：`bash deltaserve/scripts/run_e2e.sh`。
+> DeltaServe 的完整源码（含本实验的全部改动）就在 `deltaserve/DeltaServe-vLLM/`，不需要另外 clone。
+> 一条命令复现：`bash deltaserve/scripts/setup.sh && bash deltaserve/scripts/run_e2e.sh`。
 
-[DeltaServe](https://github.com/852866031/DeltaServe-vLLM) is a vLLM fork that **co-serves**: it trains a LoRA adapter
+[DeltaServe](https://github.com/852866031/DeltaServe-vLLM) (source vendored here in `DeltaServe-vLLM/`) is a vLLM fork that **co-serves**: it trains a LoRA adapter
 on the same GPUs, in the gaps between inference steps, under an SLO-aware admission scheduler. This folder uses it to
 close the RSI loop of `benchmarks/ace` **online, on one server**, instead of the offline pipeline:
 
@@ -40,12 +41,16 @@ close the RSI loop of `benchmarks/ace` **online, on one server**, instead of the
 deltaserve/
   README.md               this file
   env.sh                  paths/ports; sources ../benchmarks/ace/env.sh (ACE clone, YaRN model, vLLM 0.31). Override in env.local.sh
-  patches/deltaserve-vllm.patch   every change to DeltaServe-vLLM @ eea2a4a needed here (chat SFT data, YaRN backward,
-                                  adapter export, /ft/ingest, long context, LoRA-slot fix) — applied by setup.sh
+  DeltaServe-vLLM/        DeltaServe source used for every result here (= upstream @ eea2a4a + the patch below)
+    dserve-vllm/            the vLLM fork, pip-installable (`dserve-vllm`; Python import name `vllm`); DeltaServe code in vllm/deltaserve/
+    configs/, eval-tp/, eval-rsi/, tests/, README.md, VLLM_FORK_CHANGES.md, EXPERIMENTS.md   DeltaServe's own configs, benches, gates, docs
+    (upstream vLLM docs/ dropped to save space)
+  patches/deltaserve-vllm.patch   for review only: DeltaServe-vLLM/ vs upstream eea2a4a (chat SFT data, YaRN backward,
+                                  adapter export, /ft/ingest, long context, LoRA-slot fix, configs, tests, docs)
   configs/coserve_e2e.yaml        serving config for the end-to-end loop (template; run_e2e.sh fills __PLACEHOLDERS__)
   configs/train_only.yaml         the same recipe, training an existing SFT file with no traffic
   configs/empty_context.txt       the literal "(empty)" playbook used by the ACE adapters
-  scripts/setup.sh                clone + patch DeltaServe-vLLM, build its env, write the initial LoRA
+  scripts/setup.sh                build the DeltaServe env from DeltaServe-vLLM/, write the initial LoRA
   scripts/run_e2e.sh              THE experiment: phases A → B → ingest → C → D (one command)
   scripts/run_train.sh            DeltaServe as an offline trainer on any RSI-system chat JSONL
   scripts/eval_adapter.sh         ACE test-split eval of base / an adapter (stock vLLM 0.31, same as benchmarks/ace)
@@ -63,7 +68,7 @@ deltaserve/
 - **The ACE benchmark set up first** (`benchmarks/ace/setup/install.sh`). This folder reuses its ACE clone + venv
   (`ACE_UPSTREAM_DIR`, `ACE_PY`), the YaRN model dir (`MODEL_DIR`), stock vLLM 0.31 (`VLLM_BIN`), and the learned
   formula playbook from an ACE formula offline +GT run (`$ACE_RESULTS_DIR/finance/formula_offline_gt/*/best_playbook.txt`).
-- conda, [uv](https://docs.astral.sh/uv/), git access to DeltaServe-vLLM, and a CUDA toolkit with `nvcc ≥ 12.9`
+- conda, [uv](https://docs.astral.sh/uv/), internet access for the precompiled vLLM kernels + torch, and a CUDA toolkit with `nvcc ≥ 12.9`
   (FlashInfer JIT; default `/usr/local/cuda-13.2`, set `DS_CUDA_HOME`).
 
 ## Setup (once)
@@ -73,12 +78,19 @@ cd RSI-system
 # 0. paths: if your ACE dirs are not the defaults of benchmarks/ace/env.sh, put overrides in deltaserve/env.local.sh
 #    (any variable of env.sh / benchmarks/ace/env.sh, e.g. ACE_WORK_DIR, MODEL_DIR, VLLM_BIN, DS_ROOT, DS_ENV)
 bash deltaserve/scripts/setup.sh
-#   clone   -> DeltaServe-vLLM @ eea2a4a into $DS_ROOT (default deltaserve/work/DeltaServe-vLLM) + git apply the patch
-#   env     -> conda env $DS_ENV (python 3.12) with dserve-vllm editable (precompiled kernels, torch cu130) + pyarrow
+#   env     -> conda env $DS_ENV (python 3.12) with deltaserve/DeltaServe-vLLM/dserve-vllm installed editable
+#              (precompiled vLLM kernels are downloaded into it, git-ignored; torch cu130) + pyarrow
 #   adapter -> $DS_INIT_ADAPTER: zero-B LoRA on q,k,v,o, r=16, alpha=32 (the adapter the server trains)
 ```
-Already have a DeltaServe-vLLM checkout or env? Set `DS_ROOT` / `DS_ENV` and run only the missing steps
-(`setup.sh clone|env|adapter`).
+Already have a DeltaServe env? Set `DS_ENV` and run only `setup.sh adapter` (the env must be an editable install of
+this `DeltaServe-vLLM/`, or of a checkout with the same code, given as `DS_ROOT`).
+
+DeltaServe's own tests (CPU unless noted) run from the vendored tree:
+```bash
+cd deltaserve/DeltaServe-vLLM && source ../env.sh && ds_activate
+python tests/test_chat_sft.py; python tests/test_ft_ingest.py; python tests/test_rope_yarn.py
+python tests/test_long_context_backward.py; CUDA_VISIBLE_DEVICES="" python tests/test_adapter_export.py
+```
 
 ## Run the end-to-end experiment
 
@@ -145,5 +157,5 @@ pool immediately; they train once `POST /start_finetuning` has opened admission.
   round is not automated yet.
 - DeltaServe trains attention LoRA only (q,k,v,o), not the MLP. Samples > 16K tokens (AppWorld / WebArena) are
   skipped at ingest.
-- `benchmarks/ace/eval/empty_context.txt` here is 0 bytes, but the ACE runs used the literal `(empty)`; this folder
-  uses `configs/empty_context.txt`.
+- The "(empty)" playbook file is `configs/empty_context.txt` (the literal `(empty)`, as in the ACE runs). The old
+  0-byte `benchmarks/ace/eval/empty_context.txt` was removed and the `benchmarks/ace` sbatch scripts now point here.

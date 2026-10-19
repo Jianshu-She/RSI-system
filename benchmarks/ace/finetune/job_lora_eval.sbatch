@@ -54,7 +54,7 @@ echo "live replicas: ${#U[@]}"
 cd $ACE_UPSTREAM_DIR
 PIDS=""
 [ "${SKIP_FORMULA:-0}" = 1 ] || ( LOCAL_LLM_URL=${U[0]} EVAL_MODEL=formula EVAL_LOG_DIR=$OUT/raw_formula_lora_empty $ACE_PY $ACE_ROOT/eval/eval_split.py \
-    formula test $ACE_ROOT/eval/empty_context.txt $OUT/eval_formula_lora_empty.json > $OUT/logs/eval_formula_lora_empty.log 2>&1
+    formula test $ACE_ROOT/../../deltaserve/configs/empty_context.txt $OUT/eval_formula_lora_empty.json > $OUT/logs/eval_formula_lora_empty.log 2>&1
   echo "$(date '+%T') $(grep RESULT $OUT/logs/eval_formula_lora_empty.log)" ) & [ "${SKIP_FORMULA:-0}" = 1 ] || PIDS="$!"
 
 # 2) AppWorld LoRA (ReAct agent, shipped initial playbook, generator = appworld adapter)

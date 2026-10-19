@@ -39,7 +39,8 @@ score 75.0 on formula.
 ### Run 2 — reproduction with these exact scripts (`e2e_2026-10-19_repro/`)
 
 Fresh run of `bash deltaserve/scripts/run_e2e.sh` as documented in the README: DeltaServe-vLLM cloned from GitHub at
-eea2a4a plus `patches/deltaserve-vllm.patch`, which is byte-identical to the run-1 code.
+eea2a4a plus `patches/deltaserve-vllm.patch`, which is byte-identical to the run-1 code (and to the source now
+vendored in `deltaserve/DeltaServe-vLLM/`).
 
 | | run 1 | run 2 (repro) |
 |---|---|---|
@@ -81,5 +82,5 @@ supported claim is that **a DeltaServe-trained adapter reproduces the offline Lo
 - FiNER has no learned best playbook here, so the end-to-end loop was run on formula only.
 - Co-serving cost: p99 TTFT 54 → 725 ms. It comes from the backward child sharing the GPU (no MPS) plus the
   estimator's "eager" regime being under-sampled at launch (7 profiling samples).
-- `benchmarks/ace/eval/empty_context.txt` in this repo is 0 bytes, but the ACE adapters were trained and evaluated with
-  the literal `(empty)`. This folder ships `configs/empty_context.txt` = `(empty)` and uses it.
+- The empty playbook is the literal `(empty)` (`configs/empty_context.txt`), as in the ACE adapter runs. The 0-byte
+  `benchmarks/ace/eval/empty_context.txt` the repo used to have was removed.

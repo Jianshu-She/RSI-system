@@ -36,7 +36,7 @@ configs/qwen_*.jsonnet AppWorld experiment configs (authors' configs; provider l
 scripts/               serve_qwen.sh, run_finance.sh, run_icl.sh, run_dc.sh, run_appworld.sh, job_finance_remaining.sbatch
 baselines/             build_icl_context.py (+ icl/ the exact ICL contexts used), run_dc_finance.py (DC-CU)
 eval/                  report.py (results + paired tests), eval_split.py (score any context/LoRA on a split),
-                       finance_snapshots.py + resume_finance.py (recovery), empty_context.txt
+                       finance_snapshots.py + resume_finance.py (recovery). The "(empty)" playbook file is deltaserve/configs/empty_context.txt
 datagen/               build_sft_data.py (ACE traces -> data_v1), make_data_v2.py (empty bullet_ids), build_sft_baselines.py
 finetune/              train_lora_ace.py (original trainer), job_*.sbatch (train + serve + eval), make_lora_catalog.py
 results/               RESULTS.md, report_output.txt, lora_catalog/ (per-adapter data/training/test summary)

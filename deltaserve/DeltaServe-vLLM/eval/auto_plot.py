@@ -1,0 +1,727 @@
+#!/usr/bin/env python3
+"""auto_plot.py — 4-panel per-mode plots for DeltaServe-on-vLLM benchmarks.
+
+Self-contained port of DeltaServe/eval/llama3/auto_plot.py (helpers inlined,
+csv+numpy only — no pandas). For each workload-shape mode it builds one
+4-subplot PNG (single row):
+
+  1. Scheduled request timeline (req/s bars + output tok/s line) from
+     timelines/<gpu>/timeline_<mode>.csv
+  2. Per-request E2E latency vs time (from timeline_results<suffix>.csv)
+  3. Throughput tok/s: inference contribution + finetune contribution bands
+     (FT band from bwd_log<suffix>.csv)
+  4. TTFT SLO satisfaction rate vs the 95% target
+
+(The E2E latency percentile CDF panel previously occupied a partial second
+row; dropped to keep the figure readable. See
+``eval/auto_plot_schedulers.py`` for cross-scheduler A/B comparisons that
+include a percentile view.)
+
+Inputs (under eval/output/, suffix = '<base>_<mode>' from auto_benchmark.py):
+  timeline_results<base>_<mode>.csv
+  bwd_log<base>_<mode>.csv          (only present for --co runs)
+  timelines/<gpu>/timeline_<mode>.csv
+
+Run the benchmark first, e.g.:
+  python eval/auto_benchmark.py --co --loose
+  python eval/auto_benchmark.py --co --tight
+Then:
+  python eval/auto_plot.py            # default --suffix _co
+
+Requires matplotlib (pip install matplotlib).
+"""
+import argparse
+import csv
+import datetime
+import glob
+import os
+import re
+import subprocess
+import sys
+from typing import Optional
+
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+OUTPUT_DIR = os.path.join(_HERE, "output")
+PLOTS_DIR = os.path.join(_HERE, "plots")
+CONFIG_YAML = os.path.join(_ROOT, "configs", "serving_config_finetuning_llama3.yaml")
+DEFAULT_SLO_FALLBACK = 1.0
+
+ALL_MODES = ("loose", "tight", "nutanix")
+MODE_COLORS = {"loose": "tab:blue", "tight": "tab:red", "nutanix": "tab:green"}
+FT_SHADE_COLOR = "tab:orange"
+
+
+def _factor_value(tag: str) -> float:
+    """Map a factor tag to a numeric value for ordering.
+    ``'off'`` (auto_benchmark's encoding of the -1 "disabled" sentinel) sorts
+    as -1.0 — i.e. the smallest. Other tags parse as float."""
+    return -1.0 if tag == "off" else float(tag)
+
+
+def discover_factor_tags(output_dir: str, base_suffix: str) -> list[str]:
+    """Scan ``output_dir`` for ``timeline_results<base_suffix>_factor_<tag>_<mode>.csv``
+    files (the naming auto_benchmark emits on --co runs). Returns the set of
+    distinct ``<tag>`` strings found, sorted ascending by numeric value.
+
+    Used both for ``--factor`` auto-detection (pick smallest) and for user
+    diagnostics when a requested factor isn't present."""
+    pattern = os.path.join(
+        output_dir, f"timeline_results{base_suffix}_factor_*.csv")
+    tags: set[str] = set()
+    # The filename shape is timeline_results<base>_factor_<tag>_<mode>.csv —
+    # split on the LAST underscore before .csv to peel off the mode, then
+    # strip the known prefix to extract the tag. Validates the trailing piece
+    # against the known modes so a stray file with a different naming
+    # convention doesn't pollute the set.
+    name_re = re.compile(
+        r"^timeline_results" + re.escape(base_suffix)
+        + r"_factor_(?P<tag>[^_]+(?:\.[^_]+)?)_(?P<mode>"
+        + "|".join(re.escape(m) for m in ALL_MODES) + r")\.csv$")
+    for path in glob.glob(pattern):
+        m = name_re.match(os.path.basename(path))
+        if m is not None:
+            tags.add(m.group("tag"))
+    try:
+        return sorted(tags, key=_factor_value)
+    except ValueError:
+        # Defensive: if a tag isn't parseable as float/"off", fall back to
+        # lexicographic order so the caller still gets something usable.
+        return sorted(tags)
+
+
+def detect_gpu_subdir() -> str:
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            stderr=subprocess.DEVNULL, text=True, timeout=2.0)
+        name = (out.strip().splitlines() or [""])[0].upper()
+        if "A100" in name:
+            return "A100"
+        if "5090" in name:
+            return "5090"
+    except Exception:
+        pass
+    return "5090"
+
+
+_DEFAULT_GPU_SUBDIR = detect_gpu_subdir()
+TIMELINES_DIR = os.path.join(_HERE, "timelines", _DEFAULT_GPU_SUBDIR)
+
+
+# ---------------- IO helpers (csv + numpy) ----------------
+def ensure_exists(path: str):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing file: {path}")
+
+
+def _f(x) -> float:
+    """Parse to float, '' / None -> nan."""
+    try:
+        if x is None or str(x).strip() == "":
+            return float("nan")
+        return float(x)
+    except Exception:
+        return float("nan")
+
+
+def load_results(csv_path: str) -> dict:
+    """Columns: idx,t_rel_s,latency_s,status,ttft_s,avg_tbt_s,worst_tbt_s.
+    Returns a dict of numpy arrays + a boolean `ok` mask."""
+    cols = {k: [] for k in
+            ["idx", "t_rel_s", "latency_s", "ttft_s", "avg_tbt_s", "worst_tbt_s"]}
+    ok = []
+    with open(csv_path, newline="") as f:
+        r = csv.DictReader(f)
+        required = ["idx", "t_rel_s", "latency_s", "status", "ttft_s"]
+        missing = [c for c in required if c not in (r.fieldnames or [])]
+        if missing:
+            raise ValueError(f"{csv_path} missing columns: {missing}")
+        for row in r:
+            cols["idx"].append(_f(row.get("idx")))
+            cols["t_rel_s"].append(_f(row.get("t_rel_s")))
+            cols["latency_s"].append(_f(row.get("latency_s")))
+            cols["ttft_s"].append(_f(row.get("ttft_s")))
+            cols["avg_tbt_s"].append(_f(row.get("avg_tbt_s")))
+            cols["worst_tbt_s"].append(_f(row.get("worst_tbt_s")))
+            ok.append(str(row.get("status", "")).strip() == "ok")
+    out = {k: np.asarray(v, dtype=float) for k, v in cols.items()}
+    out["ok"] = np.asarray(ok, dtype=bool)
+    return out
+
+
+def load_timeline(csv_path: str) -> dict:
+    """Columns: timestamp_s, prompt_length, max_new_tokens (+ extras).
+    Returns {t_rel_s, max_new_tokens, row_id} numpy arrays (row_id == file
+    order, matching the benchmark's request idx)."""
+    ts, tok = [], []
+    with open(csv_path, newline="") as f:
+        r = csv.DictReader(f)
+        for c in ("timestamp_s", "max_new_tokens"):
+            if c not in (r.fieldnames or []):
+                raise ValueError(f"{csv_path} missing column: {c}")
+        for row in r:
+            ts.append(_f(row.get("timestamp_s")))
+            tok.append(_f(row.get("max_new_tokens")))
+    ts = np.asarray(ts, dtype=float)
+    tok = np.asarray(tok, dtype=float)
+    t0 = float(ts.min()) if len(ts) else 0.0
+    return {"t_rel_s": ts - t0, "max_new_tokens": tok,
+            "row_id": np.arange(len(ts), dtype=float)}
+
+
+def parse_bwd_log_csv(csv_path: str, t0_wall: Optional[datetime.datetime] = None):
+    """Returns (rel_time_s, cum_tokens, avg_tok_s). Columns:
+    timestamp, ..., batch_tokens, total_processed_tokens. Missing/empty ->
+    empty arrays (FT band just won't render).
+
+    ``t0_wall`` (if given) anchors the returned ``rel_time_s`` to that wall
+    clock — must match the inference log's t=0 origin so the two series
+    align on the same time axis. If None, falls back to anchoring at the
+    first row's wall clock (legacy behaviour; shifts FT left by the
+    benchmark-to-first-backward gap and makes inference/FT peaks appear
+    in-phase when they're really antiphase).
+    """
+    if not os.path.exists(csv_path):
+        return np.array([]), np.array([]), float("nan")
+    has_total = False
+    rows = []  # (dt, total_val_or_nan, batch_tok)
+    with open(csv_path, newline="") as f:
+        r = csv.DictReader(f)
+        if not r.fieldnames or "timestamp" not in r.fieldnames:
+            return np.array([]), np.array([]), float("nan")
+        has_total = "total_processed_tokens" in r.fieldnames
+        for row in r:
+            try:
+                dt = datetime.datetime.fromisoformat((row.get("timestamp") or "").strip())
+            except Exception:
+                continue
+            total_val = _f(row.get("total_processed_tokens")) if has_total else float("nan")
+            rows.append((dt, total_val, _f(row.get("batch_tokens"))))
+    if not rows:
+        return np.array([]), np.array([]), float("nan")
+    # De-dup by timestamp keeping the last row at each instant. With the
+    # current ms-resolution writer this is effectively a no-op (timestamps
+    # are unique per backward); kept for backwards-compat with old s-
+    # resolution logs that collapsed multiple backwards per second.
+    dedup = {}
+    for dt, total_val, batch_tok in rows:
+        dedup[dt] = (total_val, batch_tok)
+    items = sorted(dedup.items(), key=lambda x: x[0])
+    anchor = t0_wall if t0_wall is not None else items[0][0]
+    rel = np.array([(dt - anchor).total_seconds() for dt, _ in items], dtype=float)
+    batch = np.array([v[1] for _, v in items], dtype=float)
+    if has_total:
+        cum = np.array([v[0] for _, v in items], dtype=float)
+    else:
+        cum = np.cumsum(batch)
+    # Drop rows that fall strictly before the anchor (the trim keeps the
+    # ``base_ts`` seconds before the first request; the plot's t=0 is the
+    # first request); the FT throughput math downstream assumes monotonically
+    # increasing rel times >= 0.
+    if rel.size and (rel < 0).any():
+        keep = rel >= 0
+        rel, cum, batch = rel[keep], cum[keep], batch[keep]
+    # ``total_processed_tokens`` counts from the start of finetuning, so the
+    # first row inside the window carries every token trained before it
+    # (warmup + the pre-window rows just dropped). Re-base so that row
+    # contributes only its own batch — otherwise the whole pre-window total
+    # lands in the first bin as a spike.
+    if has_total and cum.size and np.isfinite(batch[0]) and np.isfinite(cum[0]):
+        cum = cum - (cum[0] - batch[0])
+    elapsed = float(rel[-1]) if len(rel) else 0.0
+    total = float(cum[-1]) if len(cum) else 0.0
+    return rel, cum, (total / elapsed if elapsed > 0 else float("nan"))
+
+
+def read_slo(yaml_path: str, key: str) -> Optional[float]:
+    try:
+        import yaml
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f) or {}
+        v = (data.get("slo", {}) or {}).get(key)
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+
+
+def read_ttft_slo(yaml_path: str) -> Optional[float]:
+    return read_slo(yaml_path, "ttft_slo")
+
+
+# ---------------- token-distribution helpers ----------------
+def _distribute_to_bins(t_starts, t_ends, weights, t_max, bin_s):
+    n_bins = int(np.ceil(t_max / bin_s)) + 1
+    bins = np.zeros(n_bins, dtype=float)
+    for ts, te, w in zip(t_starts, t_ends, weights):
+        if te <= ts:
+            b = int(ts // bin_s)
+            if 0 <= b < n_bins:
+                bins[b] += float(w)
+            continue
+        rate = float(w) / (te - ts)
+        for b in range(max(0, int(np.floor(ts / bin_s))),
+                       min(n_bins, int(np.ceil(te / bin_s)))):
+            lo = max(ts, b * bin_s)
+            hi = min(te, (b + 1) * bin_s)
+            if hi > lo:
+                bins[b] += rate * (hi - lo)
+    return bins
+
+
+def _ft_per_bin(rel_t, cum_tok, t_max, bin_s):
+    n_bins = int(np.ceil(t_max / bin_s)) + 1
+    if len(rel_t) == 0 or len(cum_tok) == 0:
+        return np.zeros(n_bins)
+    edges = np.arange(n_bins + 1) * bin_s
+    cum_at_edges = np.interp(edges, rel_t, cum_tok, left=0.0, right=float(cum_tok[-1]))
+    deltas = np.diff(cum_at_edges)
+    deltas[deltas < 0] = 0.0
+    return deltas
+
+
+def _smooth(y, window_s, bin_s):
+    if y.size == 0 or window_s <= 0 or bin_s <= 0:
+        return y
+    w = max(1, int(round(window_s / bin_s)))
+    if w <= 1 or y.size < w:
+        return y
+    return np.convolve(y, np.ones(w) / w, mode="same")
+
+
+def _auto_window(t_max):
+    return 5.0 if t_max <= 0 else float(np.clip(t_max / 100.0, 5.0, 60.0))
+
+
+# ---------------- panels ----------------
+def plot_request_timeline(ax, tl):
+    t = tl["t_rel_s"]
+    tok = tl["max_new_tokens"]
+    if len(t) == 0:
+        ax.set_title("Request Timeline (empty)")
+        return
+    bucket_idx = np.floor(t).astype(int)
+    n = int(bucket_idx.max()) + 1
+    req_per_s = np.bincount(bucket_idx, minlength=n).astype(float)
+    tok_per_s = np.bincount(bucket_idx, weights=tok, minlength=n).astype(float)
+    centers = np.arange(n, dtype=float)
+    ax.bar(centers, req_per_s, width=1.0, color="tab:gray", alpha=0.55,
+           align="edge", label="req/s", edgecolor="none")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Requests / s", color="tab:gray")
+    ax.tick_params(axis="y", labelcolor="tab:gray")
+    ax.set_xlim(0, n)
+    ax.set_ylim(bottom=0)
+    ax.set_title("Scheduled Request Timeline")
+    ax2 = ax.twinx()
+    ax2.plot(centers + 0.5, tok_per_s, color="tab:green", marker="o",
+             markersize=3, linewidth=1.5, label="tokens/s")
+    ax2.set_ylabel("Output tokens / s", color="tab:green")
+    ax2.tick_params(axis="y", labelcolor="tab:green")
+    ax2.set_ylim(bottom=0)
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, loc="upper right", fontsize=8)
+
+
+def plot_latency_vs_time(ax, res, label, color):
+    ok = res["ok"]
+    t = res["t_rel_s"][ok]
+    lat = res["latency_s"][ok]
+    avg = float(np.nanmean(lat)) if lat.size else float("nan")
+    series_label = f"{label} (avg {avg:.3f}s)" if np.isfinite(avg) else label
+    ax.scatter(t, lat, s=10, color=color, alpha=0.7, label=series_label)
+    if np.isfinite(avg):
+        ax.axhline(avg, color=color, linestyle="--", linewidth=1, alpha=0.6)
+    ax.set_title("Request E2E Latency vs Time")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Latency (s)")
+    ax.legend()
+
+
+def plot_latency_percentile(ax, res, label, color):
+    """E2E latency empirical CDF / percentile curve.
+
+    x-axis: percentile (0–100). y-axis: latency value at that percentile.
+    Surfaces tail shape that the time-scatter in ``plot_latency_vs_time``
+    hides — e.g., a fat right tail looks like a near-vertical climb on the
+    right side here, vs a few high dots on the time series.
+
+    The p99 marker is the prominent feature: a heavier vertical guide at
+    x=99 (drawn once across overlay calls), plus a per-series horizontal
+    tick at that series' p99 latency value, color-matched and annotated so
+    the value reads off the y-axis directly. p50 / p95 stay as faint guides
+    for context.
+
+    Supports being called twice on the same ``ax`` for overlay comparisons
+    (e.g. co-serving vs inf-only) — each call adds a labeled curve plus a
+    p99 horizontal tick. Annotations stack vertically to avoid overlap."""
+    ok = res["ok"]
+    lat = res["latency_s"][ok]
+    lat = lat[np.isfinite(lat)]
+    if lat.size == 0:
+        ax.set_title("E2E Latency Percentile (no data)")
+        return
+    sorted_lat = np.sort(lat)
+    # Empirical-CDF percentiles: rank i in [1..n] → percentile (i / n) × 100.
+    pct = (np.arange(1, sorted_lat.size + 1, dtype=float) / sorted_lat.size) * 100.0
+    p50 = float(np.percentile(lat, 50))
+    p95 = float(np.percentile(lat, 95))
+    p99 = float(np.percentile(lat, 99))
+    series_label = (f"{label} (p50 {p50:.2f}s · p95 {p95:.2f}s · p99 {p99:.2f}s)")
+    ax.plot(pct, sorted_lat, color=color, linewidth=1.8, label=series_label)
+
+    # Guides drawn once total (not per-series): faint p50 / p95 ticks plus a
+    # heavier p99 line so the tail is the visual anchor.
+    if not getattr(ax, "_pct_guides_drawn", False):
+        for p in (50, 95):
+            ax.axvline(p, color="0.78", linestyle=":", linewidth=0.7, zorder=1)
+        ax.axvline(99, color="0.35", linestyle="--", linewidth=1.4, zorder=1.5,
+                   label="p99")
+        ax._pct_guides_drawn = True
+
+    # Per-series p99 horizontal tick: x=0 → x=99 at y=p99, color-matched to
+    # the series. Annotation sits just right of the vertical p99 guide;
+    # multiple series stack vertically (tracked on the axis).
+    ax.hlines(p99, 0, 99, colors=color, linestyles="--",
+              linewidth=1.2, alpha=0.85, zorder=2)
+    series_idx = getattr(ax, "_pct_series_count", 0)
+    ax._pct_series_count = series_idx + 1
+    ax.annotate(f"{label} p99 = {p99:.3f}s",
+                xy=(99, p99), xytext=(8, 8 + 14 * series_idx),
+                textcoords="offset points", color=color, fontsize=8,
+                ha="left", va="bottom",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="white",
+                          edgecolor=color, alpha=0.85, linewidth=0.6))
+
+    ax.set_xlim(0, 100)
+    # ylim max should be max of the curve times 1.2, ymin should be of min*0.8
+    ax.set_ylim(sorted_lat.min() * 0.8, sorted_lat.max() * 1.2)
+    ax.set_xlabel("Percentile")
+    ax.set_ylabel("Latency (s)")
+    ax.set_title("E2E Latency by Percentile (p99 highlighted)")
+    ax.legend(loc="upper left", fontsize=8)
+
+
+def plot_throughput_curves(ax, res, tl, bwd_log, color_inf,
+                           bin_s=1.0, smoothing_window_s=None,
+                           ft_on_bottom=True):
+    """Stacked inference + finetune throughput. ``ft_on_bottom=True`` draws
+    the finetune band from 0 and stacks inference on top of it (the total is
+    the upper edge either way); False keeps the older inference-first order."""
+    # Map request idx -> timeline max_new_tokens via row_id.
+    tok_by_row = {int(rid): tok for rid, tok in
+                  zip(tl["row_id"], tl["max_new_tokens"])}
+    ok = res["ok"]
+    idx = res["idx"]
+    t_rel = res["t_rel_s"]
+    ttft = res["ttft_s"]
+    lat = res["latency_s"]
+    sel = ok & np.isfinite(ttft) & np.isfinite(lat)
+    inf_t_start, inf_t_end, inf_tokens = [], [], []
+    for i in np.nonzero(sel)[0]:
+        tok = tok_by_row.get(int(idx[i]))
+        if tok is None or not np.isfinite(tok):
+            continue
+        inf_t_start.append(t_rel[i] + ttft[i])
+        inf_t_end.append(t_rel[i] + lat[i])
+        inf_tokens.append(tok)
+    inf_t_start = np.asarray(inf_t_start, dtype=float)
+    inf_t_end = np.asarray(inf_t_end, dtype=float)
+    inf_tokens = np.asarray(inf_tokens, dtype=float)
+
+    rel_t, cum_tok, _ = bwd_log
+    t_max = max(float(inf_t_end.max()) if len(inf_t_end) else 0.0,
+                float(rel_t[-1]) if len(rel_t) else 0.0)
+    if t_max <= 0:
+        ax.set_title("Throughput (no data)")
+        return
+    inf_per_s = _distribute_to_bins(inf_t_start, inf_t_end, inf_tokens, t_max, bin_s) / bin_s
+    ft_per_s = _ft_per_bin(rel_t, cum_tok, t_max, bin_s) / bin_s
+    n = max(len(inf_per_s), len(ft_per_s))
+    inf_per_s = np.pad(inf_per_s, (0, n - len(inf_per_s)))
+    ft_per_s = np.pad(ft_per_s, (0, n - len(ft_per_s)))
+    centers = (np.arange(n) + 0.5) * bin_s
+    total = inf_per_s + ft_per_s
+    inf_avg, ft_avg, tot_avg = inf_per_s.mean(), ft_per_s.mean(), total.mean()
+    win_s = smoothing_window_s if smoothing_window_s is not None else _auto_window(t_max)
+    inf_smooth = _smooth(inf_per_s, win_s, bin_s)
+    ft_smooth = _smooth(ft_per_s, win_s, bin_s)
+    total_smooth = _smooth(total, win_s, bin_s)
+    if win_s > bin_s:
+        ax.plot(centers, total, color="black", linewidth=0.4, alpha=0.20, zorder=1)
+    if ft_on_bottom:
+        ax.fill_between(centers, 0, ft_smooth, color=FT_SHADE_COLOR, alpha=0.30,
+                        hatch="//", linewidth=0,
+                        label=f"Finetune contribution (avg {ft_avg:.0f} tok/s)", zorder=2)
+        ax.fill_between(centers, ft_smooth, total_smooth, color=color_inf, alpha=0.20,
+                        linewidth=0,
+                        label=f"Inference contribution (avg {inf_avg:.0f} tok/s)", zorder=2)
+        ax.plot(centers, ft_smooth, color=FT_SHADE_COLOR, linewidth=1.6,
+                label=f"Finetune (avg {ft_avg:.0f} tok/s)", zorder=3)
+    else:
+        ax.fill_between(centers, 0, inf_smooth, color=color_inf, alpha=0.20, linewidth=0,
+                        label=f"Inference contribution (avg {inf_avg:.0f} tok/s)", zorder=2)
+        ax.fill_between(centers, inf_smooth, total_smooth, color=FT_SHADE_COLOR, alpha=0.30,
+                        hatch="//", linewidth=0,
+                        label=f"Finetune contribution (avg {ft_avg:.0f} tok/s)", zorder=2)
+        ax.plot(centers, inf_smooth, color=color_inf, linewidth=1.6,
+                label=f"Inference (avg {inf_avg:.0f} tok/s)", zorder=3)
+    ax.plot(centers, total_smooth, color="black", linewidth=1.6,
+            label=f"Total (avg {tot_avg:.0f} tok/s)", zorder=3)
+    title = "Throughput (tokens/s)"
+    if win_s > bin_s:
+        title += f" — {win_s:.0f}s rolling mean"
+    ax.set_title(title)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Tokens / s")
+    ax.legend(loc="best", fontsize=8)
+
+
+def plot_ttft_satisfaction(ax, res, slo_s, window_s=5.0, avg_tbt_slo=None):
+    ok = res["ok"] & np.isfinite(res["ttft_s"])
+    t = res["t_rel_s"][ok]
+    ttft = res["ttft_s"][ok]
+    if t.size == 0:
+        ax.set_title("TTFT Satisfaction Rate (no data)")
+        return
+    sat = (ttft <= slo_s).astype(int)
+    grid = np.arange(0.0, float(t.max()) + 1.0, 1.0)
+    rates = np.full(len(grid), np.nan)
+    half = window_s / 2.0
+    for i, t0 in enumerate(grid):
+        mask = (t >= t0 - half) & (t <= t0 + half)
+        if mask.sum() > 0:
+            rates[i] = sat[mask].mean() * 100.0
+    overall = sat.mean() * 100.0
+    avg_ttft = float(np.mean(ttft))
+    p90_ttft = float(np.percentile(ttft, 90))
+    # Avg time-between-tokens across requests (avg_tbt_s; NaN for single-token
+    # responses → dropped). Flagged against avg_tbt_slo when available.
+    tbt = res["avg_tbt_s"][ok]
+    tbt = tbt[np.isfinite(tbt)]
+    avg_tbt = float(np.mean(tbt)) if tbt.size else float("nan")
+    ax.plot(grid, rates, color="tab:purple", linewidth=1.5,
+            label=f"Satisfaction ({int(window_s)}s window) — overall {overall:.1f}%")
+    ax.axhline(95.0, color="tab:red", linestyle="--", linewidth=1, alpha=0.6,
+               label="95% target")
+    ax.set_ylim(0, 105)
+    ax.set_title(f"TTFT Satisfaction Rate (SLO ≤ {slo_s:.2f}s)")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("% of requests")
+    # Summary TTFT stats vs the SLO (y-axis is %, so these go in a text box).
+    # Green/red flags whether avg / p90 TTFT meet the SLO.
+    _flag = lambda v, lim: (  # noqa: E731
+        "" if lim is None or not np.isfinite(v)
+        else (" ✓" if v <= lim else " ✗"))
+    tbt_line = (f"avg TBT = {avg_tbt:.3f}s{_flag(avg_tbt, avg_tbt_slo)}"
+                + (f"  (SLO {avg_tbt_slo:.2f}s)" if avg_tbt_slo else ""))
+    ax.text(0.02, 0.04,
+            f"avg TTFT = {avg_ttft:.3f}s{_flag(avg_ttft, slo_s)}\n"
+            f"p90 TTFT = {p90_ttft:.3f}s{_flag(p90_ttft, slo_s)}\n"
+            f"TTFT SLO = {slo_s:.2f}s\n"
+            f"{tbt_line}",
+            transform=ax.transAxes, fontsize=8, va="bottom", ha="left",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.75,
+                      edgecolor="0.7"))
+    ax.legend(loc="upper right", fontsize=8)
+
+
+def make_figure_for_mode(mode, base_suffix, output_dir, plots_dir,
+                         timeline_csv_dir, out_path, slo_s, window_s,
+                         throughput_window_s=None, avg_tbt_slo=None,
+                         factor_tag: Optional[str] = None,
+                         timeline_csv: Optional[str] = None,
+                         infonly_csv: Optional[str] = None,
+                         title: Optional[str] = None):
+    """Render the 4-panel figure for one mode.
+
+    ``timeline_csv`` overrides the ``timeline_<mode>.csv`` lookup under
+    ``timeline_csv_dir`` (modes whose schedule file is named differently, e.g.
+    the Nutanix 600–800 s slice); ``infonly_csv`` overrides the inference-only
+    overlay path (``timeline_results_<mode>.csv``) for output layouts that tag
+    files differently (eval-tp); ``title`` overrides the figure title."""
+    # When ``factor_tag`` is provided, the on-disk file names carry the factor
+    # in the suffix (``..._factor_<tag>_<mode>.csv``); we extend the base
+    # accordingly so all the read paths line up without callers having to
+    # pre-stitch the string. None / "" → plot legacy files without a factor
+    # suffix (e.g. inference-only runs or pre-naming-change outputs).
+    effective_base = (f"{base_suffix}_factor_{factor_tag}"
+                      if factor_tag else base_suffix)
+    full = f"{effective_base}_{mode}"
+    results_csv = os.path.join(output_dir, f"timeline_results{full}.csv")
+    bwd_log_csv = os.path.join(output_dir, f"bwd_log{full}.csv")
+    meta_json = os.path.join(output_dir, f"bench_meta{full}.json")
+    if timeline_csv is None:
+        timeline_csv = os.path.join(timeline_csv_dir, f"timeline_{mode}.csv")
+    # results + timeline required; bwd_log + meta optional (no-co runs / old runs).
+    ensure_exists(timeline_csv)
+    ensure_exists(results_csv)
+
+    tl = load_timeline(timeline_csv)
+    res = load_results(results_csv)
+    # Pick up the benchmark's wall-clock t0 from the meta file if present, so
+    # the FT series anchors at the same origin as the inference series. Falls
+    # back to first-bwd-row anchoring (legacy behaviour) if missing.
+    t0_wall = None
+    if os.path.exists(meta_json):
+        try:
+            import json as _json
+            with open(meta_json) as f:
+                _meta = _json.load(f)
+            _iso = _meta.get("t_first_wall_iso")
+            if _iso:
+                t0_wall = datetime.datetime.fromisoformat(_iso)
+        except Exception as _e:
+            print(f"[auto_plot] meta load failed ({meta_json}): {_e}")
+    bwd_log = parse_bwd_log_csv(bwd_log_csv, t0_wall=t0_wall)
+    color = MODE_COLORS.get(mode, "tab:gray")
+
+    # Single-row 4-panel layout: timeline / E2E vs time / throughput /
+    # TTFT satisfaction. (A previous revision had a 5th panel — E2E latency
+    # percentile CDF — in a partial second row; dropped to keep the figure
+    # readable. The percentile view lives separately, see
+    # eval/auto_plot_schedulers.py for the cross-scheduler comparison.)
+    fig = plt.figure(figsize=(24, 5), constrained_layout=True)
+    gs = fig.add_gridspec(1, 4)
+    ax_timeline = fig.add_subplot(gs[0, 0])
+    ax_latency = fig.add_subplot(gs[0, 1])
+    ax_throughput = fig.add_subplot(gs[0, 2])
+    ax_ttft = fig.add_subplot(gs[0, 3])
+
+    plot_request_timeline(ax_timeline, tl)
+    plot_latency_vs_time(ax_latency, res, label=mode, color=color)
+    # If this is a co-serving run, overlay the inference-only (no-co) E2E
+    # latency for the same mode when its results exist — co-serving overhead
+    # becomes visible as a function of time.
+    if base_suffix:
+        if infonly_csv is None:
+            infonly_csv = os.path.join(output_dir, f"timeline_results_{mode}.csv")
+        if (os.path.exists(infonly_csv)
+                and os.path.abspath(infonly_csv) != os.path.abspath(results_csv)):
+            try:
+                infonly_res = load_results(infonly_csv)
+                plot_latency_vs_time(ax_latency, infonly_res,
+                                     label="inf-only", color="tab:gray")
+            except Exception as e:
+                print(f"[auto_plot] skip inf-only overlay for {mode}: {e}")
+    plot_throughput_curves(ax_throughput, res, tl, bwd_log, color_inf=color,
+                           smoothing_window_s=throughput_window_s)
+    plot_ttft_satisfaction(ax_ttft, res, slo_s=slo_s, window_s=window_s,
+                           avg_tbt_slo=avg_tbt_slo)
+
+    if title is None:
+        config_tag = base_suffix.lstrip("_") or "baseline"
+        title = f"{mode}  ({config_tag}"
+        if factor_tag:
+            title += f", factor={factor_tag}"
+        title += ")"
+    fig.suptitle(title)
+    # constrained_layout handles the partial-row GridSpec; no tight_layout call.
+    os.makedirs(plots_dir, exist_ok=True)
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    print(f"[auto_plot] wrote {out_path}")
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--suffix", default="_co",
+                    help="Base config suffix WITHOUT the trailing _<mode>. "
+                         "Default '_co' (matches --co); use '' for no-co runs.")
+    ap.add_argument("--output-dir", default=OUTPUT_DIR)
+    ap.add_argument("--plots-dir", default=PLOTS_DIR)
+    ap.add_argument("--timeline-csv-dir", default=TIMELINES_DIR)
+    ap.add_argument("--mode", choices=ALL_MODES + ("all",), default="all")
+    ap.add_argument("--slo", type=float, default=None,
+                    help="TTFT SLO (s). Default: slo.ttft_slo from the finetuning YAML.")
+    ap.add_argument("--config-yaml", default=CONFIG_YAML)
+    ap.add_argument("--window", type=float, default=5.0)
+    ap.add_argument("--throughput-window", type=float, default=3)
+    ap.add_argument("--factor", default=None,
+                    help="ft_tokens_admission_constrain_factor tag to plot "
+                         "(matches auto_benchmark's _factor_<X> file suffix). "
+                         "Examples: '1', '0.5', 'off'. Default: auto-detect "
+                         "from files in --output-dir, picking the smallest "
+                         "factor (off = -1 sorts smallest). Pass '' to skip "
+                         "factor entirely (legacy files without _factor_*).")
+    args = ap.parse_args()
+
+    slo_s = args.slo
+    if slo_s is None:
+        slo_s = read_ttft_slo(args.config_yaml)
+        if slo_s is not None:
+            print(f"[auto_plot] SLO = {slo_s:.3f}s (from {os.path.basename(args.config_yaml)})")
+        else:
+            slo_s = DEFAULT_SLO_FALLBACK
+            print(f"[auto_plot] SLO = {slo_s:.3f}s (fallback)", file=sys.stderr)
+    else:
+        print(f"[auto_plot] SLO = {slo_s:.3f}s (from --slo)")
+
+    avg_tbt_slo = read_slo(args.config_yaml, "avg_tbt_slo")
+    if avg_tbt_slo is not None:
+        print(f"[auto_plot] avg-TBT SLO = {avg_tbt_slo:.3f}s")
+
+    # Resolve the factor tag. Explicit --factor wins (including '' to mean
+    # "no factor"); otherwise auto-detect by scanning output_dir for any
+    # ``..._factor_<X>_<mode>.csv`` and picking the smallest <X>.
+    factor_tag: Optional[str]
+    if args.factor is None:
+        available = discover_factor_tags(args.output_dir, args.suffix)
+        if available:
+            factor_tag = available[0]
+            other = (f" (also available: {', '.join(available[1:])})"
+                     if len(available) > 1 else "")
+            print(f"[auto_plot] auto-detected factor tag: "
+                  f"'{factor_tag}'{other}")
+        else:
+            factor_tag = None
+            print("[auto_plot] no _factor_* files found; plotting legacy paths "
+                  "(pass --factor explicitly if you have new-format files "
+                  "elsewhere).")
+    else:
+        factor_tag = args.factor or None  # "" → None (skip factor suffix)
+        if factor_tag is not None:
+            print(f"[auto_plot] factor tag from --factor: '{factor_tag}'")
+            # Surface a clear warning if the requested factor has no files —
+            # the file-not-found per-mode error below would otherwise be the
+            # only signal and would conflate with normal "didn't run that
+            # mode" misses.
+            available = discover_factor_tags(args.output_dir, args.suffix)
+            if available and factor_tag not in available:
+                print(f"[auto_plot] WARN: --factor '{factor_tag}' has no "
+                      f"matching files; available: {available}",
+                      file=sys.stderr)
+
+    modes = ALL_MODES if args.mode == "all" else (args.mode,)
+    skipped, wrote = [], 0
+    for mode in modes:
+        # PNG name carries the factor too so A/B runs don't overwrite.
+        tag = args.suffix.lstrip("_") or "baseline"
+        if factor_tag:
+            tag = f"{tag}_factor_{factor_tag}"
+        out_path = os.path.join(args.plots_dir, f"{mode}_{tag}.png")
+        try:
+            make_figure_for_mode(
+                mode=mode, base_suffix=args.suffix, output_dir=args.output_dir,
+                plots_dir=args.plots_dir, timeline_csv_dir=args.timeline_csv_dir,
+                out_path=out_path, slo_s=slo_s, window_s=args.window,
+                throughput_window_s=args.throughput_window,
+                avg_tbt_slo=avg_tbt_slo, factor_tag=factor_tag)
+            wrote += 1
+        except FileNotFoundError as e:
+            skipped.append((mode, str(e)))
+    for mode, msg in skipped:
+        print(f"[auto_plot] {mode}: skipped (missing input — {msg})", file=sys.stderr)
+    if wrote == 0:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

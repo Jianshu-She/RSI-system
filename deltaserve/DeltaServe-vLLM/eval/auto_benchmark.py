@@ -1,0 +1,1000 @@
+#!/usr/bin/env python3
+"""auto_benchmark.py — timeline benchmark for DeltaServe-on-vLLM.
+
+Port of DeltaServe/eval/llama3/auto_benchmark.py adapted to the vLLM OpenAI
+server:
+
+- Launches `dserve-vllm serve` (Llama-3-8B + the inference LoRA adapter,
+  finetuning enabled when --co) in its own process group; streams server logs
+  live.
+- Waits for /health, then (under --co) POSTs /start_finetuning so the
+  backward warms up alongside inference, then runs a warmup phase (first
+  N timeline rows, replayed on the timeline schedule, NOT recorded), an
+  optional rest, then the full timeline (recorded).
+- Each request is a STREAMING /v1/completions call: ttft_s = time from send to
+  the first streamed chunk; latency_s = time to the last chunk; avg/worst tbt
+  from inter-chunk gaps.
+- Writes per-request metrics to output/timeline_results<suffix>.csv (same
+  columns as the DeltaServe harness). When --co, the server writes a
+  finetune-throughput log (bwd_log<suffix>.csv) which is trimmed at the
+  end of the run to drop any backward rows that fall outside the
+  inference timeline window. The cutoff accounts for timelines whose
+  first row starts at a non-zero timestamp (e.g. loose's first request
+  sits at timestamp 5) — the kept window starts ``base_ts`` seconds
+  BEFORE the first request was sent, so the published log spans the
+  same coordinate range as the timeline.
+
+Hardcoded (per the eval setup): base model Llama-3-8B, FT adapter
+adapters/llama3-toy-lora-ft (via the finetuning YAML), inference adapter
+adapters/llama3-toy-lora, port/rank matching ft_experiment_llama3.py.
+
+Usage (dserve-vllm env, CUDA env per README.md):
+    python eval/auto_benchmark.py --co --loose
+    python eval/auto_benchmark.py --tight        # inference-only (no FT)
+
+Pass --publish to write the output files under the canonical names that
+the top-level ``evaluation/process_results.py`` reads — bare
+``_co_<mode>`` for every mode (loose, tight, AND nutanix), no
+``_factor_<f>`` and no ``_phase_<p>`` tag. To A/B-sweep over factor
+or scheduler-phase values, run WITHOUT ``--publish`` so the tagged
+names are kept and the runs don't overwrite each other; then re-run
+the chosen "good" configuration once with ``--publish`` to land its
+files at the canonical paths process_results picks up:
+    python eval/auto_benchmark.py --co --loose   --publish
+    python eval/auto_benchmark.py --co --nutanix --publish
+"""
+
+import argparse
+import asyncio
+import csv
+import datetime
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import random
+import string
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import aiohttp
+
+_HERE = Path(__file__).resolve().parent          # eval/
+_ROOT = _HERE.parent                             # repo root (DeltaServe-vLLM/)
+# Per-GPU timelines/ root. The 5090 keeps its local in-repo timelines
+# (``eval/timelines/5090/``) — they were generated against that board's
+# request-rate envelope. The A100 board reuses the *shared* base
+# timelines that live at the evaluation project root
+# (``<eval>/timelines/base/``), which is the single source of truth used
+# by the cross-system pipeline (process_results.py + the comparison
+# plots). Keeps A100 runs joinable with the lms / vllm+torchtune
+# baselines without re-generating per-board copies. To add a third
+# board, drop a new entry here.
+_EVAL_ROOT = _ROOT.parent                        # <…>/evaluation/
+_TIMELINES_DIRS = {
+    "5090": _HERE / "timelines" / "5090",
+    "A100": _EVAL_ROOT / "timelines" / "base",
+}
+
+
+def resolve_timelines_dir(gpu: str) -> Path:
+    """Pick the timelines/ subdir for ``gpu``. Falls back to the
+    in-repo ``eval/timelines/<gpu>/`` layout for unknown boards so a
+    future hardware addition doesn't crash at parse-time."""
+    return _TIMELINES_DIRS.get(gpu, _HERE / "timelines" / gpu)
+
+# Map ``(--timeline-gpu, --scheduler)`` → the serving YAML that selects
+# that scheduler at engine init (via ``slo.coserving_admission_phase``).
+# The 5090 uses the original YAMLs; the A100 has its own copies with
+# board-specific tunings (estimator seed, ``decode_only_ft_safety_margin``,
+# etc.). Keep the YAMLs within each board pair in sync EXCEPT for the
+# phase + decode_only_ft_safety_margin knobs.
+_SCHED_CONFIGS = {
+    "5090": {
+        "prefill": _ROOT / "configs" / "serving_config_finetuning_llama3.yaml",
+        "both":    _ROOT / "configs" / "serving_config_finetuning_llama3_both.yaml",
+    },
+    "A100": {
+        "prefill": _ROOT / "configs" / "serving_config_finetuning_llama3_A100.yaml",
+        "both":    _ROOT / "configs" / "serving_config_finetuning_llama3_both_A100.yaml",
+    },
+}
+# Schedulers are the same set across boards; flatten for argparse choices
+# and for the legacy ``_CONFIG_DEFAULT`` (kept as a 5090 default so the
+# ``_load_yaml_cfg`` fallback path stays well-defined).
+_SCHED_CHOICES = sorted(_SCHED_CONFIGS["5090"].keys())
+_CONFIG_DEFAULT = _SCHED_CONFIGS["5090"]["prefill"]
+
+
+def _resolve_sched_config(gpu: str, scheduler: str) -> Path:
+    """Pick the YAML for (gpu, scheduler). Falls back to the 5090 entry
+    if a board we don't have a per-GPU YAML for is requested — keeps the
+    benchmark runnable on future hardware until the config is added."""
+    by_sched = _SCHED_CONFIGS.get(gpu) or _SCHED_CONFIGS["5090"]
+    return by_sched[scheduler]
+
+# Per-GPU base model + HF cache root. Both boxes resolve via the HF cache
+# machinery (offline), so we pass HF repo ids (not direct paths). HF looks
+# for `<HF_HUB_CACHE>/models--<org>--<model>/...`; the default cache root
+# is `$HF_HOME/hub/`, but if the box's `models--*` dirs live somewhere
+# without that `hub/` intermediate (e.g. directly under scratch), set
+# `hf_hub_cache` explicitly to skip the indirection.
+_GPU_ENV = {
+    "5090": {
+        "model": "meta-llama/Meta-Llama-3-8B",
+        "hf_home": "/mnt/storage/huggingface",
+        # 5090: standard layout, models live under $HF_HOME/hub/, default
+        # resolver behavior works without HF_HUB_CACHE.
+        "hf_hub_cache": None,
+    },
+    "A100": {
+        "model": "meta-llama/Meta-Llama-3.1-8B",
+        "hf_home": "/home/jiaxuan_chen/scratch",
+        # A100: models are directly under /home/jiaxuan_chen/scratch/
+        # (no `hub/` intermediate), so override HF_HUB_CACHE to point
+        # there directly.
+        "hf_hub_cache": "/home/jiaxuan_chen/scratch",
+    },
+}
+_BASE_MODEL_DEFAULT = _GPU_ENV["5090"]["model"]
+_HF_HOME_DEFAULT = _GPU_ENV["5090"]["hf_home"]
+_SERVED_NAME = "llama3"
+_INFER_LORA_DIR = _ROOT / "adapters" / "llama3-toy-lora"
+_INFER_LORA_NAME = "llama3-toy-lora"
+_PORT = 8000          # matches ft_experiment_llama3.py
+_RANK_ID = 0
+OUTPUT_DIR = _HERE / "output"
+
+
+# ----------------------------------------------------------------------
+# GPU autodetect (which timelines/<gpu>/ subdir to read)
+# ----------------------------------------------------------------------
+def detect_gpu_subdir() -> str:
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            stderr=subprocess.DEVNULL, text=True, timeout=2.0,
+        )
+        name = (out.strip().splitlines() or [""])[0].upper()
+        if "A100" in name:
+            return "A100"
+        if "5090" in name:
+            return "5090"
+    except Exception:
+        pass
+    return "5090"
+
+
+# ----------------------------------------------------------------------
+# Server launch (dserve-vllm serve, from the YAML — mirrors ft_experiment_llama3.py)
+# ----------------------------------------------------------------------
+def _engine_cli_args(engine_kwargs: dict) -> list[str]:
+    args: list[str] = []
+    for key, value in engine_kwargs.items():
+        flag = "--" + key.replace("_", "-")
+        if isinstance(value, bool):
+            if value:
+                args.append(flag)
+        else:
+            args += [flag, str(value)]
+    return args
+
+
+def _finetune_cli_args(section: dict) -> list[str]:
+    args: list[str] = []
+    for key, value in (section or {}).items():
+        if value is None:
+            continue
+        val = "true" if value is True else "false" if value is False else str(value)
+        args.append(f"--finetune-config.{key}={val}")
+    return args
+
+
+def _load_yaml_cfg(config_path: Optional[str] = None) -> dict:
+    """Load the finetuning YAML once, with the repo root stripped from
+    ``sys.path`` so ``vllm`` resolves to the installed package (not any
+    source-tree copy). Same trick used by ``build_server_cmd``; factored out
+    so ``main()`` can read knobs (e.g. the FT admission factor) for the
+    output-file suffix without re-implementing the path dance.
+
+    ``config_path`` overrides the default
+    ``configs/serving_config_finetuning_llama3.yaml`` — used by the
+    ``--config`` CLI arg to A/B different scheduler variants."""
+    sys.path[:] = [p for p in sys.path
+                   if os.path.abspath(p or ".") not in {str(_HERE), str(_ROOT)}]
+    from vllm.deltaserve.config_loader import load_yaml_config
+    return load_yaml_config(str(config_path or _CONFIG_DEFAULT))
+
+
+def _phase_tag(cfg: dict) -> str:
+    """Render ``slo.coserving_admission_phase`` as a filesystem-safe suffix
+    tag. Default ``"prefill"`` (today's behaviour); ``"both"`` selects the
+    BothPhaseFinetuneScheduler that admits FT on any step composition.
+    Unrecognized values are stringified verbatim — the scheduler-selection
+    layer is authoritative on what's actually valid."""
+    phase = ((cfg.get("slo") or {})
+             .get("coserving_admission_phase"))
+    if phase is None:
+        phase = ((cfg.get("finetune") or {})
+                 .get("coserving_admission_phase"))
+    return str(phase or "prefill")
+
+
+def _ft_factor_tag(cfg: dict) -> str:
+    """Render ``slo.ft_tokens_admission_constrain_factor`` as a filesystem-
+    safe suffix tag. ``-1`` (the disabled sentinel) becomes ``off`` so a
+    no-cap run reads as ``..._factor_off`` instead of ``..._factor_-1.0``.
+    Integer values render without a decimal; floats keep ``%g`` precision."""
+    factor = ((cfg.get("slo") or {})
+              .get("ft_tokens_admission_constrain_factor"))
+    if factor is None:
+        # Belt + suspenders: some YAMLs may put it under finetune instead.
+        factor = ((cfg.get("finetune") or {})
+                  .get("ft_tokens_admission_constrain_factor"))
+    if factor is None:
+        factor = -1.0
+    f = float(factor)
+    if f == -1.0:
+        return "off"
+    if f.is_integer():
+        return str(int(f))
+    return f"{f:g}"
+
+
+def build_server_cmd(co: bool, bwd_log_path: Optional[str],
+                     api_server_count: Optional[int] = None,
+                     base_model: str = _BASE_MODEL_DEFAULT,
+                     config_path: Optional[str] = None) -> list[str]:
+    """Build the `dserve-vllm serve` command. Imports config_loader with the
+    repo root stripped from sys.path so `vllm` resolves to the installed
+    package, not any source-tree copy.
+
+    ``config_path`` overrides the default YAML — passed through from
+    ``--config`` so the server gets the right finetune/slo knobs."""
+    cfg = _load_yaml_cfg(config_path)
+    from vllm.deltaserve.config_loader import split_config
+    engine_kwargs, _, _ = split_config(cfg)
+    engine_kwargs.pop("model", None)  # positional to `dserve-vllm serve`
+
+    vllm_bin = str(Path(sys.executable).parent / "dserve-vllm")
+    cmd = [vllm_bin, "serve", base_model]
+    cmd += _engine_cli_args(engine_kwargs)
+    # Serve the inference LoRA adapter by name (requests target it).
+    cmd += ["--lora-modules", f"{_INFER_LORA_NAME}={_INFER_LORA_DIR}"]
+    if co:
+        # Finetuning on: pass the finetune / slo / debug sections, plus the
+        # bwd-throughput log path.
+        cmd += _finetune_cli_args(cfg.get("finetune") or {})
+        cmd += _finetune_cli_args(cfg.get("debug") or {})
+        cmd += _finetune_cli_args(cfg.get("slo") or {})
+        if bwd_log_path:
+            cmd.append(f"--finetune-config.bwd_log_path={bwd_log_path}")
+        # Hold FT admission closed at launch; the benchmark opens it via
+        # POST /start_finetuning right before warmup so FT and inference
+        # share warmup. (Profiling at launch is unaffected — it injects
+        # FT directly.) The bwd_log trim at end-of-run drops any backward
+        # rows that fired during warmup so the published log still
+        # matches the recorded inference timeline.
+        cmd.append("--finetune-config.start_on_launch=false")
+    # else: finetune sections omitted -> enable_finetuning defaults False.
+    cmd += ["--host", "127.0.0.1", "--port", str(_PORT),
+            "--served-model-name", _SERVED_NAME]
+    # Shard the frontend (HTTP + tokenize + detok + output processing) across
+    # N processes; the single EngineCore (and all DeltaServe state) is shared.
+    # CLI --api-server-count overrides; otherwise read server.api_server_count
+    # from the YAML (default 1).
+    if api_server_count is None:
+        api_server_count = int((cfg.get("server") or {}).get(
+            "api_server_count", 1) or 1)
+    if api_server_count > 1:
+        cmd += ["--api-server-count", str(api_server_count)]
+    return cmd
+
+
+# ----------------------------------------------------------------------
+# Request helpers
+# ----------------------------------------------------------------------
+def make_prompt_from_length_1(prompt_length: int) -> str:
+    """Deterministic char-length prompt (matches the DeltaServe harness)."""
+    base = "Instruction:\n"
+    tail = "\n### Response: "
+    filler_needed = max(0, prompt_length - len(base) - len(tail))
+    filler = ("hello " * 10000)[:filler_needed]
+    prompt = base + filler + tail
+    if len(prompt) < prompt_length:
+        prompt += "x" * (prompt_length - len(prompt))
+    return prompt[:prompt_length]
+
+
+def make_prompt_from_length(length: int) -> str:
+    words = []
+    for _ in range(max(1, length)):
+        word = "".join(random.choices(string.ascii_lowercase, k=random.randint(3, 5)))
+        words.append(word)
+    return " ".join(words).capitalize() + "."
+
+async def start_finetuning(server: str) -> bool:
+    """POST /start_finetuning to open FT admission (called right BEFORE
+    warmup so the backward warms up alongside inference)."""
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(f"{server}/start_finetuning", timeout=10) as r:
+                ok = r.status == 200
+                print(f"[bench] start_finetuning -> HTTP {r.status}", flush=True)
+                return ok
+    except Exception as e:
+        print(f"[bench] start_finetuning failed: {e}", flush=True)
+        return False
+
+
+async def wait_for_health(server: str, max_wait_s: float = 600.0,
+                          poll_s: float = 1.0,
+                          stop: Optional[asyncio.Event] = None) -> None:
+    t0 = time.monotonic()
+    async with aiohttp.ClientSession() as session:
+        while True:
+            # Honor Ctrl+C: if the caller's stop event fires, bail
+            # immediately instead of polling out to max_wait_s.
+            if stop is not None and stop.is_set():
+                print("[bench] interrupted while waiting for server health", flush=True)
+                return
+            try:
+                async with session.get(f"{server}/health", timeout=2) as r:
+                    if r.status == 200:
+                        print(f"[bench] server up at {server}", flush=True)
+                        return
+            except Exception:
+                pass
+            if time.monotonic() - t0 > max_wait_s:
+                raise TimeoutError(f"server not healthy within {max_wait_s}s")
+            # Sleep cooperatively so a stop.set() wakes us within poll_s.
+            if stop is not None:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=poll_s)
+                    continue  # loop will see stop.is_set() and return
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(poll_s)
+
+
+async def send_one_request(
+    session: aiohttp.ClientSession, server: str, idx: int, t_rel: float,
+    prompt: str, max_new_tokens: int, model: str,
+) -> Tuple[int, float, float, str, Optional[float], Optional[float], Optional[float]]:
+    """Streaming /v1/completions. Returns
+    (idx, t_rel, latency_s, status, ttft_s, avg_tbt_s, worst_tbt_s).
+
+    ttft_s = send -> first streamed chunk; latency_s = send -> last chunk;
+    tbt from inter-chunk gaps."""
+    url = f"{server}/v1/completions"
+    payload = {
+        "model": model, "prompt": prompt, "max_tokens": max_new_tokens,
+        "temperature": 0.0, "stream": True, "ignore_eos": True,
+    }
+    t_send = time.monotonic()
+    ttft: Optional[float] = None
+    chunk_times: List[float] = []
+    try:
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                await resp.read()
+                return (idx, t_rel, time.monotonic() - t_send,
+                        f"error:http{resp.status}", None, None, None)
+            async for raw in resp.content:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                now = time.monotonic()
+                if ttft is None:
+                    ttft = now - t_send
+                chunk_times.append(now)
+        latency = time.monotonic() - t_send
+        avg_tbt = worst_tbt = None
+        if len(chunk_times) >= 2:
+            gaps = [chunk_times[i + 1] - chunk_times[i]
+                    for i in range(len(chunk_times) - 1)]
+            avg_tbt = sum(gaps) / len(gaps)
+            worst_tbt = max(gaps)
+        return (idx, t_rel, latency, "ok", ttft, avg_tbt, worst_tbt)
+    except Exception as e:
+        return (idx, t_rel, time.monotonic() - t_send,
+                f"error:{type(e).__name__}", None, None, None)
+
+
+# ----------------------------------------------------------------------
+# Timeline
+# ----------------------------------------------------------------------
+@dataclass
+class TimelineRow:
+    timestamp_s: float
+    prompt_length: int
+    max_new_tokens: int
+    row_id: int
+
+
+def load_timeline_csv(path: str) -> List[TimelineRow]:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Timeline CSV not found: {path}")
+    rows: List[TimelineRow] = []
+    with open(path, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        required = {"timestamp_s", "prompt_length", "max_new_tokens"}
+        missing = required - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"Timeline CSV missing columns: {sorted(missing)}")
+        for i, r in enumerate(reader):
+            rows.append(TimelineRow(
+                timestamp_s=float(r["timestamp_s"]),
+                prompt_length=int(float(r["prompt_length"])),
+                max_new_tokens=int(float(r["max_new_tokens"])),
+                row_id=i))
+    rows.sort(key=lambda x: x.timestamp_s)
+    return rows
+
+
+def write_results_csv(path: str, rows, t_first_wall=None,
+                      real_timestamp: bool = False) -> None:
+    """Write per-request metrics. When ``real_timestamp`` is set (and a
+    ``t_first_wall`` recording origin is available), prepend an absolute
+    wall-clock ``timestamp`` column in the SAME ISO-millisecond format the
+    bwd_log uses, derived as ``t_first_wall + t_rel_s`` (the request's send
+    time on the shared wall clock). ``t_rel_s`` is always kept."""
+    emit_ts = bool(real_timestamp) and t_first_wall is not None
+    if real_timestamp and t_first_wall is None:
+        print("[bench] --real-timestamp requested but no recording origin "
+              "(t_first_wall) is available; writing relative-only CSV.",
+              flush=True)
+    base_cols = ["idx", "t_rel_s", "latency_s", "status",
+                 "ttft_s", "avg_tbt_s", "worst_tbt_s"]
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow((["timestamp"] if emit_ts else []) + base_cols)
+        for idx, t_rel, latency, status, ttft, avg_tbt, worst_tbt in rows:
+            base = [idx, t_rel, latency, status, ttft, avg_tbt, worst_tbt]
+            if emit_ts:
+                # Same format as coordinator._write_bwd_log_row so the two
+                # logs land on a single wall clock.
+                ts = (t_first_wall + datetime.timedelta(seconds=float(t_rel))
+                      ).isoformat(timespec="milliseconds")
+                w.writerow([ts] + base)
+            else:
+                w.writerow(base)
+    print(f"[bench] wrote results CSV: {path}"
+          f"{' (with wall-clock timestamp column)' if emit_ts else ''}",
+          flush=True)
+
+
+def trim_bwd_log_before(path: str, cutoff: datetime.datetime) -> None:
+    """Drop bwd_log rows whose ``timestamp`` is strictly before
+    ``cutoff``. Compares at full microsecond precision so the row in
+    the same second as the cutoff is dropped if it sits a few hundred
+    ms earlier — the previous second-truncation pass leaked that row,
+    which then landed in a negative full-timeline bucket downstream
+    and got silently dropped by ``_bucketize`` in process_results.py."""
+    if not os.path.exists(path):
+        print(f"[bench] no bwd_log to trim at {path}", flush=True)
+        return
+    # Parse each row's timestamp to a datetime instead of relying on
+    # lexicographic ISO comparison; that way ``cutoff=03:05:30.908``
+    # correctly rejects ``timestamp=03:05:30.068``.
+    with open(path, "r", newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        all_rows = list(reader)
+    if not fieldnames or "timestamp" not in fieldnames:
+        return
+    def _parse(ts: str) -> Optional[datetime.datetime]:
+        try:
+            return datetime.datetime.fromisoformat(ts.strip())
+        except (ValueError, TypeError):
+            return None
+    kept = [r for r in all_rows
+            if (_parse(r.get("timestamp") or "") or cutoff) >= cutoff]
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(kept)
+    print(f"[bench] trimmed bwd_log {path}: kept {len(kept)}/{len(all_rows)} "
+          f"rows (cutoff {cutoff.isoformat(timespec='milliseconds')})", flush=True)
+
+
+WARMUP_START_OFFSET_S = 1.0
+
+
+async def _run_rows(server: str, rows: List[TimelineRow], stop: asyncio.Event,
+                    model: str, record: bool, label: str,
+                    request_timeout_s: float = 600.0):
+    """Replay `rows` on their timeline schedule.
+
+    - **Record phase** (``record=True``) honours each row's absolute
+      ``timestamp_s`` as the wall offset from scheduling start, so a
+      timeline that begins with a leading valley (e.g. tight: first
+      request at t=6s) actually waits 6s before firing the first
+      request. The bench's wall-clock duration matches the
+      timeline's full span (60s for tight) and ``t_first_wall`` is
+      the wall clock of the first request (= scheduling start + base_ts).
+    - **Warmup phase** (``record=False``) keeps the pre-existing
+      normalized behaviour (``- base_ts``) so warmup dispatches
+      immediately and doesn't waste time on a synthetic leading
+      valley before the FT subprocess gets a chance to spin up.
+
+    The recorded ``t_rel_s`` column always means "seconds since the
+    first request fires" — same semantics for both phases, so
+    downstream consumers (process_results, the trim cutoff math) are
+    unchanged regardless of which phase produced the CSV."""
+    results = []
+    if not rows:
+        return results, None
+    base_ts = min(r.timestamp_s for r in rows)
+    offset = 0.0 if record else WARMUP_START_OFFSET_S
+    # ``schedule_shift`` is what we subtract from each row's
+    # timestamp when computing its target. Warmup normalizes
+    # (subtract base_ts → first row fires at t0); record honours the
+    # leading valley (subtract 0 → first row fires at t0 + base_ts).
+    schedule_shift = base_ts if not record else 0.0
+    connector = aiohttp.TCPConnector(limit=0)
+    timeout = aiohttp.ClientTimeout(total=request_timeout_s)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        t0 = time.monotonic()
+        # ``t_first_wall`` always means "wall clock at which the FIRST
+        # request fires" — downstream consumers (process_results,
+        # trim_bwd_log_before, --real-timestamp column) depend on this
+        # semantic. With the record-phase pre-roll, the first request
+        # fires at t0 + base_ts wall-time, so push t_first_wall forward
+        # by base_ts. Warmup (schedule_shift=base_ts) keeps the
+        # first-fires-at-t0 behaviour, so its t_first_wall is "now".
+        first_offset = base_ts - schedule_shift   # = base_ts (record), 0 (warmup)
+        t_first_wall = datetime.datetime.now() + datetime.timedelta(
+            seconds=first_offset)
+        total = max(r.timestamp_s for r in rows) - schedule_shift
+        if first_offset > 0:
+            print(f"[bench] {label}: {len(rows)} requests, span {total:.1f}s "
+                  f"(includes {first_offset:.1f}s leading wait before "
+                  f"first request fires)", flush=True)
+        else:
+            print(f"[bench] {label}: {len(rows)} requests, span {total:.1f}s",
+                  flush=True)
+
+        async def _one(row: TimelineRow):
+            target = t0 + (row.timestamp_s - schedule_shift) + offset
+            delay = target - time.monotonic()
+            if delay > 0:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=delay)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+            if stop.is_set():
+                return
+            # ``t_rel`` = seconds since the FIRST request fired. With
+            # the record-phase pre-roll, monotonic time at the first
+            # request is ``t0 + base_ts`` (assuming offset=0 for
+            # record), so subtract first_offset so t_rel of the first
+            # request is 0 — matches the historical CSV semantic.
+            t_rel = time.monotonic() - t0 - first_offset
+            prompt = make_prompt_from_length(row.prompt_length)
+            res = await send_one_request(
+                session, server, row.row_id, t_rel, prompt,
+                row.max_new_tokens, model)
+            if record:
+                results.append(res)
+
+        # Periodic progress: print the elapsed timeline time every 4s.
+        async def _progress():
+            while not stop.is_set():
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=4.0)
+                    return
+                except asyncio.TimeoutError:
+                    elapsed = min(time.monotonic() - t0, total)
+                    print(f"[bench] {label} t={elapsed:.0f}s / {total:.0f}s "
+                          f"({len(results)} recorded)", flush=True)
+
+        prog = asyncio.create_task(_progress())
+        try:
+            await asyncio.gather(*[asyncio.create_task(_one(r)) for r in rows])
+        finally:
+            prog.cancel()
+            try:
+                await prog
+            except (asyncio.CancelledError, Exception):
+                pass
+        print(f"[bench] {label} done", flush=True)
+        results.sort(key=lambda x: x[0])
+        return results, t_first_wall
+
+
+# ----------------------------------------------------------------------
+# Process teardown
+# ----------------------------------------------------------------------
+def terminate(proc: subprocess.Popen) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+        proc.wait(timeout=30)
+    except Exception:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+
+
+async def main() -> None:
+    gpu_default = detect_gpu_subdir()
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--timeline_csv", default=None,
+                    help="Schedule CSV. Default per --timeline-gpu: "
+                         "5090 → eval/timelines/5090/timeline_live.csv, "
+                         "A100 → <eval>/timelines/base/timeline_live.csv "
+                         "(shared with the cross-system pipeline).")
+    ap.add_argument("--timeline-gpu", default=gpu_default, choices=["5090", "A100"],
+                    help=f"Selects the timelines/ root (see "
+                         f"resolve_timelines_dir). Default auto-detected "
+                         f"({gpu_default}).")
+    ap.add_argument("--loose", action="store_true")
+    ap.add_argument("--tight", action="store_true")
+    ap.add_argument("--nutanix", action="store_true")
+    ap.add_argument("--co", action="store_true",
+                    help="Enable finetuning (co-serving). Off => inference only.")
+    ap.add_argument("--warmup_count", type=int, default=1000)
+    ap.add_argument("--warmup_duration_s", type=float, default=20.0)
+    ap.add_argument("--warmup_rest_s", type=float, default=7.0)
+    ap.add_argument("--startup-timeout", type=float, default=600.0)
+    ap.add_argument("--api-server-count", type=int, default=None,
+                    help="Number of frontend API server processes (shared "
+                         "single EngineCore). >1 shards output processing. "
+                         "Overrides server.api_server_count in the YAML.")
+    ap.add_argument("--scheduler", choices=_SCHED_CHOICES,
+                    default="prefill",
+                    help="Which co-serving scheduler to load. 'prefill' "
+                         "(default) uses the original FT-rides-prefill "
+                         "scheduler; 'both' uses BothPhaseFinetuneScheduler "
+                         "(FT admits to any step composition under SLO). Maps "
+                         "to the corresponding serving YAML "
+                         "(serving_config_finetuning_llama3{,_both}.yaml). "
+                         "The loaded phase is appended to the output suffix "
+                         "as _phase_<phase>.")
+    ap.add_argument("--config", default=None,
+                    help="Path to a serving YAML to use verbatim, overriding "
+                         "the --scheduler/--timeline-gpu auto-resolution. Use "
+                         "for one-off configs (e.g. the estimator-validation "
+                         "YAML, configs/serving_config_finetuning_llama3_"
+                         "validate.yaml).")
+    ap.add_argument("--model", default=None,
+                    help="Base model id (HF) or local path. Default is "
+                         "per-GPU: " + ", ".join(
+                             f"{g}={v['model']}" for g, v in _GPU_ENV.items()
+                         ) + ". Use this to override (e.g. for a new local "
+                         "checkpoint).")
+    ap.add_argument("--hf-home", default=None,
+                    help="HF cache root (sets HF_HOME for the server). "
+                         "Default is per-GPU: " + ", ".join(
+                             f"{g}={v['hf_home']}" for g, v in _GPU_ENV.items()
+                         ) + ". Respected only if HF_HOME is not already in "
+                         "your env.")
+    ap.add_argument("--hf-hub-cache", default=None,
+                    help="Override HF_HUB_CACHE (the dir directly containing "
+                         "`models--<org>--<model>/`). Defaults to the per-GPU "
+                         "value (only set when the box's cache layout skips "
+                         "the standard $HF_HOME/hub/ intermediate; A100 box "
+                         "needs this).")
+    ap.add_argument("--f", "-f", dest="log_to_file", action="store_true",
+                    help="Capture server stdout/stderr to "
+                         "eval/output/server<suffix>.log instead of streaming "
+                         "to this terminal. Off by default (logs print live so "
+                         "you can see startup banners and any crash trace).")
+    ap.add_argument("--publish", action="store_true",
+                    help="Write the output files (timeline_results, bwd_log, "
+                         "bench_meta) under the canonical names that the "
+                         "top-level evaluation/process_results.py reads. "
+                         "Drops BOTH the scheduler `_phase_<phase>` tag and "
+                         "the FT-admission `_factor_<X>` tag for every mode "
+                         "(loose / tight / nutanix), so every published run "
+                         "lands at the same canonical path. Two different "
+                         "factor or phase values run with --publish will "
+                         "OVERWRITE each other — A/B sweeps should skip "
+                         "this flag and let the tagged suffix split the "
+                         "output files apart, then run the chosen 'good' "
+                         "configuration once more with --publish to land "
+                         "the final files at the canonical paths.")
+    ap.add_argument("--real-timestamp", action="store_true",
+                    help="Add an absolute wall-clock 'timestamp' column to the "
+                         "results CSV, in the SAME format as bwd_log "
+                         "(ISO-8601, millisecond precision, e.g. "
+                         "2026-06-01T16:33:48.117). It records each request's "
+                         "send time on the same wall clock the bwd_log uses, so "
+                         "inference and finetune throughput can be aligned "
+                         "directly without the bench_meta anchor. The relative "
+                         "t_rel_s column is preserved. Off by default.")
+    ap.add_argument("--no-trim", action="store_true",
+                    help="Skip the end-of-run bwd_log trim. By default the "
+                         "bwd_log is trimmed to the timeline window starting "
+                         "``base_ts`` seconds before the first request "
+                         "(see the run docs for the cutoff math). The trim "
+                         "drops the backward cycle that straddles the "
+                         "timeline-start boundary, which makes the FT "
+                         "throughput at timeline second 0 read as zero. "
+                         "Pass --no-trim to keep every row the backward "
+                         "process wrote, so downstream tools "
+                         "(process_results.py) can include the boundary "
+                         "cycle when binning FT throughput at the start "
+                         "of the window.")
+    args = ap.parse_args()
+
+    if sum(bool(x) for x in (args.loose, args.tight, args.nutanix)) > 1:
+        ap.error("--loose, --tight, --nutanix are mutually exclusive")
+
+    timelines_dir = resolve_timelines_dir(args.timeline_gpu)
+    mode: Optional[str] = None
+    if args.loose:
+        mode, args.timeline_csv = "loose", str(timelines_dir / "timeline_loose.csv")
+    elif args.tight:
+        mode, args.timeline_csv = "tight", str(timelines_dir / "timeline_tight.csv")
+    elif args.nutanix:
+        mode, args.timeline_csv = "nutanix", str(timelines_dir / "timeline_nutanix.csv")
+    elif args.timeline_csv is None:
+        args.timeline_csv = str(timelines_dir / "timeline_live.csv")
+
+    timeline_rows = load_timeline_csv(args.timeline_csv)
+    print(f"[bench] loaded {len(timeline_rows)} rows from {args.timeline_csv}", flush=True)
+
+    # Resolve the serving YAML path from (--timeline-gpu, --scheduler).
+    # The 5090 and A100 boards have separate YAMLs because the estimator
+    # seed, decode_only_ft_safety_margin, and similar tunings are board-
+    # specific. The actual phase tag in the output suffix is read from
+    # the LOADED YAML's ``slo.coserving_admission_phase`` (not just
+    # args.scheduler) so a typo in the YAML doesn't silently disagree
+    # with the output file name.
+    if args.config:
+        config_path = str(Path(args.config).expanduser().resolve())
+        print(f"[bench] --config → {config_path}", flush=True)
+    else:
+        config_path = str(_resolve_sched_config(args.timeline_gpu, args.scheduler))
+        print(f"[bench] --timeline-gpu={args.timeline_gpu} "
+              f"--scheduler={args.scheduler} → "
+              f"{Path(config_path).relative_to(_ROOT)}", flush=True)
+
+    # Output suffix. Two layouts:
+    #
+    # Default (tagged):  <co?>_factor_<f>_phase_<p>_<mode>. Tags (only on
+    # --co runs) let A/B comparisons across
+    # ``ft_tokens_admission_constrain_factor`` values AND scheduler
+    # ``coserving_admission_phase`` land in distinct files. ``-1``
+    # (disabled) renders as ``off``; default phase is ``prefill``.
+    # Mirrors the plotter's {base}_{mode} scheme.
+    #
+    # With --publish:    canonical names that the top-level
+    # evaluation/process_results.py reads —
+    #   all modes (loose / tight / nutanix): "_co" + "_<mode>"
+    #   (no factor tag, no phase tag — those are A/B-sweep variants
+    #   that --publish collapses to the single "shipped" file path).
+    base = "_co" if args.co else ""
+    factor_tag = phase_tag = None
+    if args.co:
+        cfg = _load_yaml_cfg(config_path)
+        factor_tag = _ft_factor_tag(cfg)
+        phase_tag = _phase_tag(cfg)
+        print(f"[bench] ft_tokens_admission_constrain_factor tag: "
+              f"_factor_{factor_tag} | "
+              f"coserving_admission_phase tag: _phase_{phase_tag}",
+              flush=True)
+        if args.publish:
+            # process_results.py reads bare _co_<mode> for every mode.
+            # ``base`` is already "_co"; nothing extra to append. The
+            # nutanix case used to keep the factor tag here for
+            # historical A/B reasons — see the file header for the
+            # new recommendation: sweep without --publish, then
+            # re-publish the chosen run.
+            print(f"[bench] --publish: writing canonical names "
+                  f"(base='{base}', both factor + phase tags dropped)",
+                  flush=True)
+        else:
+            base = f"{base}_factor_{factor_tag}_phase_{phase_tag}"
+    suffix = base + (f"_{mode}" if mode else "")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_csv = str(OUTPUT_DIR / f"timeline_results{suffix}.csv")
+    bwd_log = str(OUTPUT_DIR / f"bwd_log{suffix}.csv") if args.co else None
+    if bwd_log and os.path.exists(bwd_log):
+        os.remove(bwd_log)  # fresh log per run
+
+    # Resolve the base model + HF cache + HF hub cache: explicit CLI flags
+    # win, else look up by detected GPU, else fall back to the 5090 defaults.
+    gpu_env = _GPU_ENV.get(args.timeline_gpu, _GPU_ENV["5090"])
+    base_model = args.model or gpu_env["model"]
+    hf_home = args.hf_home or gpu_env["hf_home"]
+    hf_hub_cache = args.hf_hub_cache or gpu_env.get("hf_hub_cache")
+    model_src = "--model" if args.model else f"auto (gpu={args.timeline_gpu})"
+    hf_src = "--hf-home" if args.hf_home else f"auto (gpu={args.timeline_gpu})"
+    print(f"[bench] base model:    {base_model}  [{model_src}]", flush=True)
+    print(f"[bench] HF_HOME:       {hf_home}  [{hf_src}]", flush=True)
+    if hf_hub_cache:
+        hc_src = "--hf-hub-cache" if args.hf_hub_cache else f"auto (gpu={args.timeline_gpu})"
+        print(f"[bench] HF_HUB_CACHE:  {hf_hub_cache}  [{hc_src}]", flush=True)
+
+    server = f"http://127.0.0.1:{_PORT}"
+    cmd = build_server_cmd(args.co, bwd_log, args.api_server_count,
+                           base_model=base_model, config_path=config_path)
+    print("[bench] launching:", " ".join(cmd), flush=True)
+    print(f"[bench] results -> {out_csv}"
+          + (f" | bwd_log -> {bwd_log}" if bwd_log else ""), flush=True)
+
+    env = dict(os.environ)
+    env.setdefault("HF_HOME", hf_home)
+    if hf_hub_cache:
+        env.setdefault("HF_HUB_CACHE", hf_hub_cache)
+    env.setdefault("HF_HUB_OFFLINE", "1")
+    env.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+    env["PYTHONSAFEPATH"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
+
+    # --f → capture all server stdout/stderr (scheduler / coordinator /
+    # backward prints) to a file so the run can be inspected after the fact.
+    # Otherwise inherit the parent's stdio so they print live to the
+    # terminal. The file path is reported either way so the user knows where
+    # to look (or that nothing was written).
+    logf = None
+    server_log: Optional[str] = None
+    if args.log_to_file:
+        server_log = str(OUTPUT_DIR / f"server{suffix}.log")
+        logf = open(server_log, "w")
+        popen_kwargs = dict(stdout=logf, stderr=subprocess.STDOUT)
+        print(f"[bench] server log -> {server_log}  (tail -f to watch live)",
+              flush=True)
+    else:
+        popen_kwargs = dict()  # inherit parent stdio → terminal
+        print("[bench] server log -> terminal (pass --f to capture to file)",
+              flush=True)
+    proc = subprocess.Popen(cmd, env=env, cwd=tempfile.gettempdir(),
+                            start_new_session=True, **popen_kwargs)
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    # SIGINT handling: first Ctrl+C sets the stop event so loops can wind
+    # down cleanly. A second Ctrl+C escalates to SIGKILL on the server's
+    # process group + raises KeyboardInterrupt, so the user is never
+    # trapped if a long await (e.g. wait_for_health during model load, or
+    # a hung _run_rows row) isn't checking stop fast enough.
+    _ctrlc = {"count": 0}
+
+    def _on_sigint() -> None:
+        _ctrlc["count"] += 1
+        if _ctrlc["count"] == 1:
+            print("\n[bench] Ctrl+C — shutting down "
+                  "(press again to force kill)", flush=True)
+            stop.set()
+        else:
+            print("\n[bench] Ctrl+C (force) — SIGKILLing server now",
+                  flush=True)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
+            # Restore default SIGINT so a third Ctrl+C cleanly kills us too.
+            loop.remove_signal_handler(signal.SIGINT)
+            raise KeyboardInterrupt
+
+    loop.add_signal_handler(signal.SIGINT, _on_sigint)
+
+    try:
+        await wait_for_health(server, args.startup_timeout, stop=stop)
+        if stop.is_set():
+            return
+
+        # Warmup row selection: min(count cap, duration cap) from row 0.
+        warmup_n = 0
+        if timeline_rows and args.warmup_count > 0 and args.warmup_duration_s > 0:
+            base_ts = timeline_rows[0].timestamp_s
+            by_dur = sum(1 for r in timeline_rows
+                         if r.timestamp_s - base_ts <= args.warmup_duration_s)
+            warmup_n = min(args.warmup_count, by_dur, len(timeline_rows))
+        warmup_rows = timeline_rows[:warmup_n]
+        print(f"[bench] warmup rows: {len(warmup_rows)}", flush=True)
+
+        model = _INFER_LORA_NAME  # inference requests target the inference LoRA
+
+        # Open FT admission BEFORE warmup so the backward pass warms up
+        # together with inference. The end-of-run trim_bwd_log_before
+        # pass drops any backward rows that fired before the recorded
+        # timeline started (t_first_wall), so the published bwd_log
+        # still matches the inference window written to disk.
+        if args.co:
+            await start_finetuning(server)
+
+        if warmup_rows:
+            await _run_rows(server, warmup_rows, stop, model,
+                            record=False, label="warmup")
+            if stop.is_set():
+                return
+            if args.warmup_rest_s > 0:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=args.warmup_rest_s)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+
+        results, t_first_wall = await _run_rows(
+            server, timeline_rows, stop, model, record=True, label="timeline")
+        write_results_csv(out_csv, results, t_first_wall=t_first_wall,
+                          real_timestamp=args.real_timestamp)
+
+        # Persist the benchmark wall-clock t0 so the plotter can anchor the
+        # finetune log (which has wall-clock timestamps) to the same origin
+        # as the inference log (which is monotonic-relative to this same t0).
+        # Without this the FT series anchors at the first backward row's
+        # wall clock, which lags benchmark t0 by however long it took the
+        # first backward to fire — shifts the FT curve left and makes
+        # inference/FT peaks appear in-phase when they're actually antiphase.
+        if t_first_wall is not None:
+            import json as _json
+            meta_path = str(OUTPUT_DIR / f"bench_meta{suffix}.json")
+            with open(meta_path, "w") as f:
+                _json.dump({"t_first_wall_iso": t_first_wall.isoformat()}, f)
+
+        # Give the server a moment to flush any in-flight backward row,
+        # then trim the bwd_log to the timeline window. The cutoff
+        # accounts for the timeline's base offset: a timeline whose
+        # first request sits at ``timestamp_s = base_ts`` (e.g.
+        # base_ts=5 for loose) lines that request up with
+        # ``t_first_wall`` — meaning timeline coordinate 0 corresponds
+        # to wall clock ``t_first_wall - base_ts``. We keep bwd_log
+        # entries from that earlier instant onward so the published log
+        # spans the same window as the inference timeline (instead of
+        # dropping the first ``base_ts`` seconds of finetune activity).
+        if args.co and bwd_log and t_first_wall is not None:
+            await asyncio.sleep(1.0)
+            if args.no_trim:
+                # --no-trim: keep every bwd row, including the cycle
+                # that straddles the timeline-start boundary, so
+                # downstream binning can attribute its tokens to the
+                # first window second instead of reading zero there.
+                print(f"[bench] --no-trim: keeping bwd_log as-is "
+                      f"({bwd_log})", flush=True)
+            else:
+                # Pull base_ts straight from the loaded timeline so the
+                # cutoff adapts to whatever CSV was passed in (loose: 5.0,
+                # tight: 3.0, nutanix: 0.6, future timelines: whatever
+                # their first row says). ``timeline_rows`` is sorted
+                # ascending by ``load_timeline_csv``, so [0] is the min.
+                base_ts = timeline_rows[0].timestamp_s if timeline_rows else 0.0
+                cutoff = t_first_wall - datetime.timedelta(seconds=base_ts)
+                print(f"[bench] trimming bwd_log to >= {cutoff.isoformat(timespec='milliseconds')} "
+                      f"(t_first_wall − base_ts={base_ts:g}s, "
+                      f"from {Path(args.timeline_csv).name})", flush=True)
+                trim_bwd_log_before(bwd_log, cutoff)
+    finally:
+        # Give the server a 1s breather before tearing it down so the
+        # backward process can flush any in-flight bwd_log row + close
+        # files cleanly. Without this the last row(s) sometimes don't
+        # make it to disk before SIGINT propagates and the file is
+        # truncated mid-line.
+        # try:
+        #     await asyncio.sleep(1.0)
+        # except Exception:
+        #     pass
+        stop.set()
+        print("[bench] shutting down server", flush=True)
+        terminate(proc)
+        if logf is not None:
+            try:
+                logf.close()
+            except Exception:
+                pass
+        if server_log is not None:
+            print(f"[bench] done | server log: {server_log}", flush=True)
+        else:
+            print("[bench] done", flush=True)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

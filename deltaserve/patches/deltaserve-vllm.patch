@@ -1,3 +1,843 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 25ab5f7..1ebd3b7 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -749,6 +749,14 @@ python eval-tp/ft_bench_tp.py --family qwen3-0.6b --tp 1 --duration 60
+ python eval-tp/auto_benchmark_tp.py --family qwen3-14b --tp 2 --co --loose --kill-stale   # timeline replay (real co-serving workload)
+ python eval-tp/auto_benchmark_tp.py --family llama3 --tp 2 --tight                        # inference-only baseline
+ python eval-tp/launch_deltaserve.py --start-finetuning  # just bring a server up (--family as above)
++# Qwen3-32B TP=4, 16K context (H200): full env + caveats in README.md "Running the experiments" §3
++python eval-tp/ft_bench_tp.py --config configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml --rps 0 --duration 300 --startup-timeout 2400 --kill-stale
++python tests/test_long_context_backward.py              # long-context gates: chunked attention / streaming head / batch_tokens (26 cases)
++# RSI-system chat-JSONL workloads (ACE Finance): README.md "Running the experiments" §4
++CUDA_VISIBLE_DEVICES=0,1,2,3 eval-rsi/run_ds_ace.sh formula   # train -> eval-rsi/adapters/formula/final (PEFT); eval with eval-rsi/eval_ace.sh
++CUDA_VISIBLE_DEVICES=0,1,2,3 eval-rsi/run_rsi_e2e.sh           # end-to-end RSI on ONE server: serve -> traces -> POST /ft/ingest -> train in the gaps -> eval
++python tests/test_ft_ingest.py                                # runtime ingest gate (8 cases)
++python tests/test_chat_sft.py; python tests/test_rope_yarn.py; CUDA_VISIBLE_DEVICES="" python tests/test_adapter_export.py   # chat data / YaRN / export gates
+ python tests/test_llama3_tp_shard.py                    # M2 gate (23 cases)
+ python tests/test_llama3_tp_backward_gloo.py            # M3 gate (10 cases, real gloo)
+ python tests/test_qwen3_tp_shard.py                     # Qwen3 M2 gate (42 cases)
+diff --git a/EXPERIMENTS.md b/EXPERIMENTS.md
+new file mode 100644
+index 0000000..287d5eb
+--- /dev/null
++++ b/EXPERIMENTS.md
+@@ -0,0 +1,251 @@
++# Experiment log
++
++### lc16k-a — Qwen3-32B TP4 16K-context FT bring-up (pure FT)   (2026-10-12, H200 node, GPUs 0-3 ×4)
++- **Reflection/audit:** Qwen3-32B co-serving was validated only at max_model_len 2048 / FT samples ≤512 tokens.
++  For 16K I changed five things: FT exempt from `long_prefill_token_threshold`; `backward_batch_tokens`
++  decouples batch size from buffer capacity; `backward_cuda_graph_max_tokens` (graphs at 512 rows, long
++  backwards eager); query-chunked fp32 attention fwd/bwd; streaming (online-logsumexp) LM head. Offline
++  gates: the 4 gradcheck suites (816 cases) pass on both the default and the forced long paths, and
++  `tests/test_long_context_backward.py` passes 26/26: chunked attention error ≤1.4e-6, head error 1e-7,
++  and a 16K Qwen3-32B-shard attention backward at 125 ms/layer with +3.5 GiB peak. Not yet tested
++  end-to-end on the GPU: 16K FT forward through vLLM, buffer memory, TP reduces at 16K rows, and the
++  mixed long/short scheduling. This run tests exactly that, with nothing else changed (no inference traffic).
++- **Goal/criteria (PASS if all hold):**
++  1. Server boots on TP4 with the 16K buffer, with no OOM in workers or backward children.
++  2. After POST /start_finetuning, cycles fire for both short (~512-token, graph) and long (1.2K–14.9K, eager) batches.
++  3. Every long bucket appears in the bwd log (n up to ~14.9K).
++  4. Loss is finite on every cycle.
++  5. Per-rank peak memory is under 141 GB.
++- **Hypothesis:** with chunked attention and the streaming head, the backward child's temporaries are
++  O(few GB) at 16K, so the run is bounded by the ~58 GB/rank activation buffer, which vLLM accounts as
++  model memory (allocated at load_model, before KV profiling).
++- **Command:** `CUDA_VISIBLE_DEVICES=0,1,2,3 FLASHINFER_WORKSPACE_BASE=/tmp/claude-4536/fi CUDA_HOME=/usr/local/cuda-13.2 PATH=/usr/local/cuda-13.2/bin:$ENV/bin:$PATH HF_HUB_OFFLINE=1 $ENV/bin/python eval-tp/ft_bench_tp.py --config configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml --rps 0 --duration 300 --kill-stale`
++  (ENV = miniconda3/envs/dserve-vllm, rebuilt 2026-10-12: torch 2.11.0+cu130, transformers 4.57.6.)
++- **Config:**
++  - Engine: max_model_len 20480; max_num_batched_tokens 16384; long_prefill_token_threshold 2048; gpu_mem_util 0.75.
++  - Buffer and batching: max_saved_finetuning_tokens 16384; backward_batch_tokens 512; backward_cuda_graph_max_tokens 512.
++  - Saves: save_attn_qkv, save_attn_ctx and save_resid_mid all on.
++  - Optimizer: lr 3e-4, wd 0.01, epochs 100.
++  - Adapter: qwen3-32b-qkv-r8-initial (q/k/v, r=8, α=32).
++  - Profiling: profile_on_launch off.
++- **Data:** `long_ft_corpus.txt` from `scripts/make_long_ft_corpus.py` (seed 0): 200 alpaca short samples, plus 6 OpenR1-Math problem+trace samples in each length bucket: [1024,2048), [2048,4096), [4096,8192), [8192,12288), [12288,16000). Lengths are Qwen3 tokenizer counts. No holdout (systems bring-up, not a quality eval).
++- **Model/loss:** Qwen3-32B base frozen; LoRA q/k/v r=8 trained; shifted CE over all tokens (current backend); AdamW.
++- **Predicted:**
++  - Boot OK. Per-rank memory ≈ 106 GB (vLLM) + 10–15 GB (child).
++  - Short cycles in graph mode at 0.15–0.3 s.
++  - A ~15K-token cycle eager at 8–12 s: attention ≈ 64 × 125 ms, plus GEMMs, head and 128 reduces of ~168 MB.
++  - Loss finite: short ≈ 1.5–2.5, long math traces lower (≈ 0.5–1.2).
++  - **FALSIFIED if** any of: OOM; a 16K FT request is chunked across steps (activations misaligned → loss explodes or a crash); long samples never admitted (stall with samples left); NaN.
++- **Actual (attempt 1, 21:55):** weights loaded (15.6 GiB/rank); the 16K activation buffers were allocated and shared on all 4 ranks
++  (64 layers, no OOM). Then killed by ft_bench's `--startup-timeout 600` during the first-time torch.compile (fresh env,
++  compile range 1..16384 + has_ft set). The `aten::slice ... SymInt` error is the SIGTERM landing inside Inductor fake
++  propagation (`signal_handler` frame), not a model bug.
++- **Decision:** relaunch unchanged except `--startup-timeout 2400`.
++- **Actual (attempt 2, 22:07):** compile hit the cache. OOM at KV allocation: vLLM reported `Available KV cache memory:
++  80.84 GiB` at util 0.75, so the ~58 GB/rank activation buffers are NOT in vLLM's budget (my hypothesis that they are
++  accounted as model memory was wrong). 0.75×139.8 + 58 > 139.8.
++- **Decision:** util 0.75 → 0.42. Budget: vLLM 58.7 GB (15.6 weights + ~37 KV) + buffers 58 + child ~15 ≈ 132 GB.
++  Follow-up: subtract the buffers from vLLM's budget automatically.
++- **Actual (attempt 3, 22:13):** PASS on the systems criteria. 115 backward cycles in 300 s, every bucket trained, no OOM,
++  all 4 ranks bit-identical, every loss finite.
++  - Short ~500-token batches: graph mode, ~210 ms.
++  - Eager long cycles: 4,344 → 1.63 s; 6,463 → 2.58 s; 9,870 → 4.71 s; 12,698 → 7.53 s; 14,867 → 9.37 s.
++  - nvidia-smi showed 142.6 GB/rank once the long cycles ran (mostly the child's caching allocator).
++  - **But the model never learned:** epoch-1 losses equal epoch-0 losses to 15 digits.
++- **Root cause (bisected on Qwen3-1.7B TP2; profiling-ON learns, profiling-OFF does not):**
++  1. vLLM's warmup/graph capture ends in `remove_all_adapters()`, which drops the FT adapter pinned at load_model.
++  2. The FT adapter is then lazily re-loaded into whichever slot is free; a debug run showed `index_to_id=[1, 1000]`.
++  3. The backward keeps publishing into slot 0, which now holds the INFERENCE adapter. So the FT forwards read the initial
++     weights (no learning) and the inference adapter is silently overwritten.
++  4. The launch profiling pass hid this because its FT requests re-activate the FT adapter into slot 0 first.
++- **Fix:** `Worker._repin_ft_served_lora()` at the end of `compile_or_warm_up_model` re-adds and re-pins the FT adapter, and
++  raises if it does not land in the shared slot.
++  - Verified on 1.7B TP2 with the 32B flags (profiling off, inference adapter used before FT): `[1000, 1]`, and batch-1
++    loss goes 2.63 → 0.98 between epochs.
++
++### lc16k-b — rerun of lc16k with the LoRA re-pin fix   (2026-10-12, H200 GPUs 0-3 ×4)
++- **Reflection/audit:** lc16k-a proved the systems path (memory, timing, TP lock-step) but learned nothing because of the slot
++  bug. Now fixed and verified on the small model. This run checks that 16K long-context FT actually learns on 32B.
++- **Goal/criteria:** the same systems criteria as lc16k-a, PLUS epoch-1 loss < epoch-0 loss on the same batches. The batch
++  order is deterministic, so per-batch comparison is valid. Expect clear drops on the short batches, and the long buckets
++  lower too.
++- **Command:** same as lc16k-a attempt 3 (config `configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml`, util 0.42,
++  `--rps 0 --duration 300 --startup-timeout 2400 --kill-stale`).
++- **Predicted:** systems numbers within ±5 % of lc16k-a; epoch-1 short-batch losses ≈ 40–60 % of epoch 0; long buckets
++  lower by 10–30 %. **FALSIFIED if** epoch-1 losses are again identical, or re-pin raises.
++- **Actual:** **PASS.**
++  - Re-pin logged slot 0 on all 4 ranks; no OOM or Traceback.
++  - Long-cycle time unchanged (14,867 tokens → 9.37 s).
++  - Per-batch epoch-1 / epoch-0 loss ratio: **all 41 batches < 1**. Short ~500-token batches 0.70–0.88; 1.2K–4K 0.62–0.89;
++    4K–10K 0.86–0.95; 10K–15K 0.96–0.97.
++  - The long samples drop less than predicted. Each is seen once per epoch at lr 3e-4 r=8 (q/k/v only), and the epoch-0
++    long losses already include the in-epoch learning.
++  - Audit: train-set loss only, measuring "the published weights reach the forward". It is not a generalization or quality
++    metric, and there is no holdout. The batch order is deterministic, so the per-batch comparison is like-for-like (the
++    63-token flush batch is identical in both epochs).
++- **Decision:** 16K long-context co-serving FT on Qwen3-32B TP4 works end to end, and the LoRA re-pin fix is required. Next:
++  (1) make the vLLM memory budget subtract the activation buffers automatically; (2) a co-serving run with real 16K
++  inference traffic (TTFT and SLO under long prefills; the estimator is linear and may under-predict quadratic attention).
++
++### rsi-ace-1 — RSI-system ACE Finance LoRA SFT on DeltaServe vs the offline trainer   (2026-10-19, fs-mbz-gpu-198 ×8, job 2721371)
++- **Reflection/audit:** DeltaServe can now train on RSI-system data. Three gaps are closed and CPU-gated:
++  - G1, chat JSONL plus a loss mask: token-for-token equal to both offline trainers on 60 real rows each of
++    formula/finer/appworld; masked head == autograd.
++  - G2, YaRN in the backward RoPE: bit-equal to vLLM's YaRN cache.
++  - G5, PEFT adapter export: TP=2 merge == TP=1.
++
++  None of it has run on GPU yet. The question is whether a DeltaServe-trained adapter reproduces the offline LoRA gain
++  under the user's exact eval protocol.
++
++  Known recipe differences vs their adapters (formula_ace_v2 = 75.0, finer_ace_v2 = 68.5; base 69.0 / 61.8):
++  - DeltaServe trains attention-only (no MLP LoRA).
++  - 16K tokens/step vs ~32K.
++  - Constant LR vs cosine with warmup; no dropout; no 5 % dev hold-out.
++
++  To separate "DeltaServe's trainer" from "attention-only", their own trainer is re-run attention-only as a control.
++- **Goal/criteria:**
++  1. DeltaServe trains both datasets to the end: final adapter exported, loss falling, no NaN or OOM.
++  2. Test accuracy (empty context, their `eval_split.py` + stock vLLM 0.31, temp 0) of the DS adapter is within noise
++     (~±3 pts, n=200) of their attention-only control.
++  3. Both are above base. Test = held out; the adapters train on TRAIN-split traces only (their leak audit).
++- **Commands:**
++  - GPUs 0–3: `eval-rsi/run_ds_ace.sh formula; eval-rsi/run_ds_ace.sh finer`. This runs
++    `eval-tp/launch_deltaserve.py --config configs/serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml` with
++    data_path → `data_v2/<task>.jsonl`, `--start-finetuning`.
++  - GPUs 4 / 5: `verl/python eval-rsi/train_lora_ace_targets.py --data data_v2/<task>.jsonl --out eval-rsi/ctrl/<task>
++    --epochs 2 --lr 1e-4 --rank 16 --alpha 32 --dropout 0.05 --tokens_per_step 32768 --seed 42
++    --targets q_proj,k_proj,v_proj,o_proj`.
++  - GPUs 6–7: the regression gates (TP NCCL graph tests, long-context GPU part, optional-LoRA, adapter export).
++- **DS config:**
++  - Model: Qwen3-32B-yarn131k (YaRN x4), TP4, max_model_len 20480, util 0.42.
++  - Buffer: 16384-token buffer, backward_batch_tokens 16384, graphs at 512 rows (big batches eager), all saves on.
++  - Recipe: LoRA q,k,v,o r16 α32 (zero-B init, `adapters/qwen3-32b-qkvo-r16-initial`), lr 1e-4 constant, wd 0,
++    2 epochs, chat_loss_on ace / thinking off.
++- **Data:** formula_v2 803 rows (534K tokens; their 763 train / 40 dev split); finer_v2 277 rows (707K tokens).
++  Test: their test split (formula 200, finer ~200; same as their catalog).
++- **Predicted:**
++  - DS trains to `final/` in under 30 min per task. Loss starts ~0.35 and falls to ~0.2 (their dev loss 0.34 → 0.18).
++  - Attention-only control: formula ~72–75, finer ~66–68.5 (a bit below their full LoRA).
++  - DS within ±3 of the control.
++  - **FALSIFIED if:** DS loss doesn't fall; or the DS adapter scores ≤ base while the control is above it (that would mean
++    a mask/rope/export bug); or the export fails to load in vLLM.
++- **Actual:** **PASS** on every criterion.
++  - Regression gates on the node: TP NCCL graph 4020/4020, NCCL trainer 222/222, long-context 26/26; the CPU gates
++    (optional-LoRA 49/49, export 9/9, chat 17/17, YaRN 8/8) need `CUDA_VISIBLE_DEVICES=""` because with GPUs visible
++    the TP helper picks NCCL for CPU tensors.
++  - DS training:
++    - Formula: 803 rows, 177,105 target tokens; 62 cycles × ~16K tokens in 3 min 49 s; epoch loss means 0.218 → 0.141.
++    - FiNER: 94 cycles in 7 min 9 s; epoch means 0.288 → 0.207.
++    - Adapter re-pinned in slot 0 on all ranks; final/ exported; it loads in stock vLLM 0.31 `--lora-modules`.
++  - Control (their trainer, q,k,v,o only, 42 / ~28 steps): final dev loss finer 0.215, formula 0.205.
++  - Test accuracy (their eval_split.py, vLLM 0.31, empty context, temp 0), with paired sign tests on per-item
++    correctness from the error lists:
++
++    | | base | ctrl (attn-only, their trainer) | **DS (attn-only, co-serving trainer)** | their full LoRA (catalog) |
++    |---|---|---|---|---|
++    | Formula (n=200) | 68.0 | 72.0 (+17/−9, p=0.17) | **75.5** (+23/−8 vs base, p=0.011) | 75.0 (p=0.05) |
++    | FiNER (n=441 tags) | 61.5 | 61.3 | **71.2** (+80/−15 vs base, p<1e-4; +58/−15 vs ctrl) | 68.5 (p=0.0005) |
++
++  - Base reproduces their catalog: 69.0 / 61.8.
++  - FiNER per-item correctness = "no tag wrong", so the sign test can move even when tag accuracy doesn't
++    (ctrl: 61.3 vs 61.5, yet +44/−22).
++- **Audit:** held-out TEST split; adapters trained on TRAIN-derived rows only (their data, their leak audit). Same eval
++  harness and model config as their catalog. Single runs (temp 0).
++- **Caveat / not yet separated:** DS beats the attention-only control, but its recipe takes 2.2× more optimizer steps (16K
++  vs 32K tokens/step) at a CONSTANT lr 1e-4 (theirs: cosine with warmup), no dropout, and trains the 5 % dev rows too. The
++  gap vs ctrl is therefore most likely the schedule, not the system. Claim only that a DS-trained adapter reproduces (and
++  here matches or exceeds) their offline LoRA gains under their eval.
++- **Decision:** the RSI-system ACE Finance workload runs on DeltaServe end to end. Next:
++  1. A matched-schedule control (their trainer at 16K tokens/step, constant LR) to attribute the gap.
++  2. Co-serving: their eval traffic as inference while training in the gaps.
++  3. AppWorld (28K samples; G3) and MLP LoRA (G4).
++
++### rsi-e2e-1 — end-to-end RSI on ONE DeltaServe server: serve → traces → ingest → train in the gaps → eval   (2026-10-19, fs-mbz-gpu-198, job 2721371)
++- **Reflection/audit:** rsi-ace-1 showed that DeltaServe trains RSI-system data to their offline LoRA level, but it ran
++  training ONLY, on data produced offline. The RSI claim needs the loop closed on one live server:
++  - the server's own traffic produces the traces;
++  - the traces become training data;
++  - the LoRA trains in the gaps of continuing inference, without hurting it.
++
++  New for this run:
++  - `POST /ft/ingest`: runtime append to the FT store (EngineCore utility → `FinetuneScheduler.deltaserve_ingest`
++    → `FinetuningStore.add_rows`; `tests/test_ft_ingest.py` 8/8).
++  - `eval-rsi/rsi_traffic.py`: ACE's Generator request + scorer, streamed, with timing.
++  - `eval-rsi/traces_to_sft.py`: their build_sft_data + make_data_v2 recipe applied to served traces.
++  - The standard pause policy (prefill-only), not the strict 0-token throttle of the baselines YAML: that one would
++    pause the backward on every decode step.
++- **Goal/criteria:**
++  1. The loop completes on one server: traces → ≥ 300 correct rows → ingested → final/ exported while the phase-C
++     traffic runs.
++  2. The final adapter beats base on the formula test split, with their protocol (stock vLLM 0.31, empty context;
++     base 68.0 on this node).
++  3. Inference under co-serving: TTFT p50 within 1.3× of phase A on the same traffic, and ≥ 90 % of requests under
++     the 0.3 s TTFT SLO.
++- **Command:** `CUDA_VISIBLE_DEVICES=0,1,2,3 eval-rsi/run_rsi_e2e.sh`.
++  - Config: `configs/serving_config_finetuning_qwen3_32b_tp4_rsi_e2e.yaml` — rsi_ace + data_path null,
++    profile_on_launch true, max_model_len 40960, fwd_token_throttle / pause_prefill_always off.
++  - Traffic:
++    - A / C: formula test (200), empty playbook, Poisson 0.5 rps.
++    - B: formula train (500) with the learned best_playbook (29,747 tokens, prefix-cached), 16 concurrent.
++  - Training recipe as rsi-ace-1: q,k,v,o r16 α32, lr 1e-4, 2 epochs over the ingested rows, 16K tokens/backward.
++- **Predicted:**
++  - B: ~80 % correct → ~400 rows.
++  - C: FT completes in 10–30 min, contended.
++  - Adapter: 72–76 on test, below rsi-ace-1's 75.5 because there are fewer rows (≈ 400 vs 803).
++  - A vs C: TTFT p50 ×1.0–1.2, p99 higher; SLO satisfaction ≥ 95 %.
++  - **FALSIFIED if** FT starves (no final/ within 60 min of traffic), the adapter is ≤ base, or SLO satisfaction < 90 %.
++- **Actual:**
++  - Server up at 14:28. Launch profiling fit 152 samples; the eager regime got only 7 (rmse n/a).
++  - A (inference only): base 67.0 % (134/200; vLLM 0.31 on this node: 68.0).
++  - B: 427/500 correct (85.4 %) in 180 s; the 30K-token playbook prompts were prefix-cached.
++  - Ingest: 427 rows / 263,053 tokens accepted live (`/ft/ingest`), epoch 0/2.
++  - C (co-serving): 34 backward cycles (526K tokens) in **4 min 35 s** while the test traffic ran; loss epoch means
++    0.291 → 0.155; final/ exported at cycle 34.
++  - D: **75.0 % (150/200)** vs base 68.0: +20/−6, sign-test p = 0.0094. For comparison: their offline full LoRA 75.0;
++    rsi-ace-1 DS on their data_v2 75.5; the attention-only control 72.0.
++
++  Latency on the same traffic and server:
++
++  | | A: inference only (n=200) | C: during training (n=116) |
++  |---|---|---|
++  | TTFT p50 / p90 / p99 / max | 38 / 45 / 54 / 770 ms | 84 / 176 / 725 / 1077 ms |
++  | TTFT < 0.3 s SLO | 99.5 % | 96.6 % |
++  | E2E p50 / p90 / p99 | 1.70 / 2.54 / 4.01 s | 2.30 / 5.24 / 6.66 s |
++  | errors | 0 | 0 |
++
++  Criteria:
++  1. Loop completes — PASS.
++  2. Beats base — PASS.
++  3. SLO ≥ 90 % — PASS (96.6). TTFT p50 ≤ 1.3× — **FAIL**: 2.2×, though 84 ms is still 3.5× under the SLO.
++- **Audit:**
++  - Test split held out. Training rows come only from TRAIN-split traces the server itself produced (correct by ACE's
++    own scorer). The eval is their exact protocol, on a different engine (stock vLLM 0.31).
++  - C's accuracy line (69.8 %) is the BASE model on 116 requests (the traffic targets the base, not the adapter) —
++    not an adapter number.
++  - Single run, temp 0.
++- **Decision:**
++  - The RSI loop runs end to end on one DeltaServe server and reproduces the offline LoRA gain from its own served
++    traces.
++  - The co-serving latency cost is real: p99 TTFT 54 → 725 ms. It comes from the backward sharing the GPU (no MPS)
++    plus the eager regime being under-fitted at launch.
++  - Next levers: the matched-schedule control; more profiling coverage of the eager/FT shapes; an A/B of
++    `pause_prefill_always` / fwd_token_throttle at a non-zero threshold for p99.
++
++### rsi-e2e-2 — reproduction of rsi-e2e-1 with the packaged RSI-system scripts   (2026-10-19, fs-mbz-gpu-198, job 2721371)
++- **Why:** before publishing `RSI-system/deltaserve/`, prove its scripts (env.sh + configs/coserve_e2e.yaml template +
++  scripts/run_e2e.sh) reproduce rsi-e2e-1 as written in its README. The DeltaServe code is unchanged: a fresh clone at
++  eea2a4a + the shipped patch is byte-identical to the validated tree.
++- **Command:** `bash deltaserve/scripts/run_e2e.sh verify` (env.local.sh points at this cluster's ACE dirs).
++- **Predicted:**
++  - Same phases complete.
++  - Adapter test accuracy within ±3 of 75.0 (temp 0; the traces may differ slightly between runs).
++  - Co-serving SLO ≥ 90 %.
++  - **FAIL if** any script step breaks, or the result deviates beyond noise.
++- **Actual:** **PASS.** Every step ran as documented.
++  - A: base 67.5 %, TTFT p50/p99 36/51 ms.
++  - B: 427/500 correct.
++  - Ingest: 427 rows / 262,947 tokens.
++  - C: 34 cycles, 4 min 37 s; epoch loss 0.290 → 0.155; TTFT p50/p99 83/217 ms; SLO 99.1 %.
++  - D: **74.5 %** vs base 66.5 % on the same eval engine (+24/−8, p = 0.007).
++  - Audit: the co-serving tail varies run to run (p99 725 → 217 ms). The base moves ~1.5 points between evals at temp 0.
++- **Decision:** publish `RSI-system/deltaserve/` with both runs in results/RESULTS.md.
+diff --git a/README.md b/README.md
+index 477b361..8c66ce8 100644
+--- a/README.md
++++ b/README.md
+@@ -497,6 +497,77 @@ latency / throughput / SLO figure.
+ > kills the server via SIGKILL and aborts — useful if the server is stuck
+ > in a long await (e.g. FlashInfer JIT or model load).
+ 
++### 3. Qwen3-32B, TP=4, 16K context (H200)
++
++Long-context co-serving: 16K-token inference prompts AND FT samples up to 16K tokens. Validated
++2026-10-12 on 4× H200 (`EXPERIMENTS.md`, lc16k-b). Every batch's loss is lower in epoch 1 than in
++epoch 0, and a 14,867-token sample trains in 9.4 s.
++
++```bash
++cd DeltaServe-vLLM
++ENV=$HOME/miniconda3/envs/dserve-vllm
++# per shell: env-private FlashInfer JIT cache (a stale CUDA-12 cache in ~/.cache/flashinfer
++# crashes sampling with "libcudart.so.12: cannot open") + a CUDA >= 12.9 nvcc for its JIT
++export FLASHINFER_WORKSPACE_BASE=$HOME/.cache/flashinfer-dserve CUDA_HOME=/usr/local/cuda-13.2 \
++       PATH=/usr/local/cuda-13.2/bin:$ENV/bin:$PATH HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0,1,2,3
++
++# (a) training-only benchmark (no inference traffic); bwd log in eval-tp/output/
++$ENV/bin/python eval-tp/ft_bench_tp.py \
++    --config configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml \
++    --rps 0 --duration 300 --startup-timeout 2400 --kill-stale
++
++# (b) just bring the server up (inference on :8000, FT in the gaps)
++$ENV/bin/python eval-tp/launch_deltaserve.py \
++    --config configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml --start-finetuning
++```
++
++- **Startup** takes 3–5 min with a warm compile cache and more than 10 min on a fresh one. Keep
++  `--startup-timeout 2400`; the default of 600 s kills the server mid-compile, and the error
++  surfaces as a misleading Inductor `aten::slice ... SymInt` message.
++- **`gpu_memory_utilization` must stay at 0.42.** vLLM's budget does not include the activation
++  buffers, which are ~58 GB per card at 16K, so anything higher OOMs at KV allocation.
++- **FT data:** `finetune.data_path`, one sample per line, at most 16K tokens. The default
++  `long_ft_corpus.txt` is a test corpus built by `scripts/make_long_ft_corpus.py`.
++- **Served model name:** `llama3`. The launchers' default family tag is a naming quirk; the model
++  is Qwen3-32B. The output files are tagged `llama3_tp4` for the same reason.
++- **Not yet validated:** co-serving under heavy 16K *inference* traffic. The step-time estimator
++  is linear in tokens, so it may under-predict long-prompt TTFT.
++- **Knobs and code changes:** see `VLLM_FORK_CHANGES.md`, "Stage LC".
++
++### 4. RSI-system workloads (ACE Finance) on DeltaServe
++
++[RSI-system](https://github.com/Jianshu-She/RSI-system) turns agent traces into chat JSONL and LoRA-trains Qwen3-32B on
++them. DeltaServe trains on the same files directly. Set `finetune.data_path` to a `.jsonl` file plus
++`finetune.chat_loss_on` / `chat_thinking`; the rendering is token-for-token the offline trainers'. The served model
++can carry YaRN x4 (the backward's RoPE follows it), and the trained adapter is exported as a PEFT directory.
++
++```bash
++# per shell: same env as §3. One 8×H200 node (salloc --no-shell … then srun --jobid=<id> --overlap …)
++CUDA_VISIBLE_DEVICES=0,1,2,3 eval-rsi/run_ds_ace.sh formula     # TP=4 training only -> eval-rsi/adapters/formula/final
++CUDA_VISIBLE_DEVICES=0,1,2,3 eval-rsi/run_ds_ace.sh finer
++eval-rsi/eval_ace.sh 4 9314 formula ds_formula $PWD/eval-rsi/adapters/formula/final   # their protocol: vLLM 0.31, empty ctx
++eval-rsi/eval_ace.sh 5 9315 formula base_formula                                      # base, same node
++python3 eval-rsi/compare_ace.py formula base ctrl ds                                  # paired sign tests
++```
++
++- Config: `configs/serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml` (YaRN model dir, q,k,v,o r16/α32 from
++  `scripts/init_qwen3_lora_adapter.py`, lr 1e-4, 2 epochs, 16K tokens per backward, `chat_loss_on: ace`,
++  `adapter_save_dir`). The driver writes a per-task copy (data path, export dir, bwd log) to `configs/.gen_rsi_ace_<task>.yaml`.
++- Exports: `<adapter_save_dir>/cycle<N>/` every `adapter_save_every` cycles, `latest/`, and `final/` once
++  `num_epochs` epochs are trained. Under TP, rank 0 writes the merged adapter.
++- Result (2026-10-19, `EXPERIMENTS.md` rsi-ace-1): Formula 68.0 → **75.5**, FiNER 61.5 → **71.2** test accuracy; their
++  offline full LoRA scores 75.0 / 68.5. Formula trained in 4 min and FiNER in 7 min on 4 H200s.
++- **End to end on one server** (`eval-rsi/run_rsi_e2e.sh`, config `…_rsi_e2e.yaml`):
++  1. Serve the traffic, keeping traces (`eval-rsi/rsi_traffic.py`).
++  2. Convert the correct traces into SFT rows (`eval-rsi/traces_to_sft.py`) and send them to `POST /ft/ingest`
++     (`{"rows": [{"messages": …}]}`).
++  3. `POST /start_finetuning`. The LoRA then trains in the gaps of the continuing traffic and is exported to
++     `final/`.
++
++  Result (2026-10-19, `EXPERIMENTS.md` rsi-e2e-1): Formula 68.0 → **75.0** from 427 self-generated rows, trained in
++  4.6 min under traffic. TTFT SLO 99.5 % → 96.6 % (p50 38 → 84 ms, p99 54 → 725 ms).
++- Not yet covered: AppWorld / WebArena (samples up to 28–32K tokens), MLP LoRA.
++
+ ### Note on a fresh clone
+ 
+ Compiled kernels (`*.so`) and model weights (`*.safetensors`, tokenizer
+diff --git a/VLLM_FORK_CHANGES.md b/VLLM_FORK_CHANGES.md
+index 409cd41..1e523f2 100644
+--- a/VLLM_FORK_CHANGES.md
++++ b/VLLM_FORK_CHANGES.md
+@@ -766,6 +766,107 @@ arrival at the engine). No other engine-loop changes.
+ 
+ ---
+ 
++## Stage RSI — RSI-system chat SFT data, YaRN backward RoPE, adapter export (2026-10-19)
++
++All inert by default: a plain-text corpus, a model without rope scaling, and no `adapter_save_dir` all keep the old
++behaviour.
++
++**Chat SFT data (loss on assistant tokens only).**
++- `deltaserve/chat_sft.py` ports the encode functions of RSI-system's trainers: `chat_loss_on` = `last` / `all` (the
++  shared `rsi/finetune/train_lora.py`) or `ace` (the ACE trainer); `chat_thinking` = on / off.
++- `config/finetune.py`: a `.jsonl` `data_path` selects it, configured by `chat_loss_on` and `chat_thinking`.
++- `finetuning_store.py`: `FinetuningSample.loss_spans`; JSONL rows are rendered with the HF tokenizer, which
++  `ft_scheduler._build_tokenize` attaches as `tokenize.tokenizer`.
++
++**Getting the spans to the backward in the runner's write order.** The scheduler's FT order can differ from the
++InputBatch order, so the spans are matched by FT request id:
++- The scheduler passes `reserve(…, req_spans={req_id: spans})`.
++- The runner reports `_ft_req_ids` in write order, through `record_capture(n, lens, req_ids)` or the TP relay tuple
++  `ModelRunnerOutput.finetune_saved = (n, lens, ids)`.
++- The coordinator keeps `sample_spans`, parallel to `sample_lens`, and ships them as `loss_spans` on the trigger:
++  `notify_buffer_full` at TP=1, the relayed command under TP.
++- `bwd_services/base.py` and `common/trainer.py` pass `loss_spans` to `common/head.py:head_backward`, which keeps
++  only the rows predicting span tokens; `n_valid` = the number of target tokens.
++
++**YaRN in the backward RoPE.**
++- `ft_meta.rope_scaling_of`: None, or a YaRN dict. Any other scaling raises.
++- `common/ops.rope_cos_sin(…, scaling)` reuses vLLM's YaRN helpers: frequencies plus `mscale` on cos/sin.
++- Wired into both the trainer and the graph runner. RSI-system serves Qwen3-32B with YaRN x4.
++
++**Adapter export.**
++- `LoraSftTrainerService.export_adapter` writes the fp32 masters as a PEFT directory, with the
++  `adapter_config.json` copied from the source adapter. Under TP the shards are gathered over the children's
++  gloo group (q/k/v B row shards, o A column shards) and rank 0 writes.
++- Triggers: `finetune.adapter_save_dir` / `adapter_save_every` (`cycle<N>/` + `latest/`), plus `final/` once
++  `num_epochs` are trained (`after_cycle` hook in `base.py`).
++
++**Runtime ingest (`POST /ft/ingest`).**
++- `entrypoints/serve/finetune/api_router.py` handles `/ft/ingest`, which makes an EngineCore utility call
++  (`engine_core.call_utility_async`) to `v1/engine/core.py:EngineCore.deltaserve_ingest_ft`.
++- That calls `FinetuneScheduler.deltaserve_ingest`, which runs `FinetuningStore.add_rows`. New samples join the
++  current epoch's pool; the epoch counter restarts at 0 if nothing has been trained yet. The coordinator's corpus
++  total / `min_sample_len` and the child's corpus meta are kept in sync.
++- Under TP, the worker re-forwards the corpus total whenever it changes (it used to forward only once).
++- A server can start with `data_path: null` and learn only from what it is sent.
++- Gate: `tests/test_ft_ingest.py` 8/8. End to end: `EXPERIMENTS.md` rsi-e2e-1.
++
++**Gates.**
++- `tests/test_chat_sft.py` 17/17 (token-for-token vs both trainers on real formula / finer / appworld rows).
++- `tests/test_rope_yarn.py` 8/8 (0 error vs vLLM's YaRN cache).
++- `tests/test_adapter_export.py` 9/9 (TP=2 merge == TP=1).
++- The existing gradcheck / NCCL / hook gates unchanged.
++- End to end: `EXPERIMENTS.md` rsi-ace-1.
++
++---
++
++## Stage LC — 16K long context on Qwen3-32B TP4 + the FT-adapter slot fix (2026-10-12)
++
++**Bug fix (affects every run with `profile_on_launch: false`).**
++`vllm/v1/worker/gpu_worker.py` — new `Worker._repin_ft_served_lora()`, called at the end of
++`compile_or_warm_up_model`.
++- vLLM's warmup and graph capture end in `remove_all_adapters()`, which also dropped the FT adapter
++  pinned (and shared with the backward) in `_maybe_share_ft_served_lora`.
++- The FT adapter was then lazily re-loaded into whichever slot was free. With the inference adapter
++  already in the shared slot, the backward published into the inference adapter's slot, and FT
++  forwards read the initial weights: no learning, and the inference adapter silently overwritten.
++- The launch profiling pass hid it, because its FT requests re-activate the FT adapter into slot 0 first.
++- Now the FT adapter is re-added and re-pinned before serving starts, and a mismatch with the shared
++  slot raises. `_maybe_share_ft_served_lora` records `_ft_lora_request` / `_ft_served_slot`.
++
++**Long-context FT** (inert unless configured; short samples take the old code paths):
++- `vllm/config/finetune.py` adds two knobs:
++  - `backward_batch_tokens` (0 = capacity): decouples the backward batch from the buffer capacity.
++  - `backward_cuda_graph_max_tokens` (0 = buffer): the graph capture rows; bigger backwards run eager.
++- `deltaserve/coordinator.py`:
++  - New `batch_tokens` and `batch_tokens_of()`.
++  - `space_remaining()` offers the full capacity to an EMPTY buffer and tops a non-empty one up to
++    `batch_tokens` only.
++- `deltaserve/ft_scheduler.py`: the second and later samples in a step also stay within `batch_tokens`.
++  `gpu_worker.py` sets `batch_tokens` on the worker coordinator.
++- `vllm/v1/core/sched/scheduler.py` (two sites): FT requests skip `long_prefill_token_threshold`
++  (they must prefill in one step). Inference chunks stay capped.
++- `deltaserve/bwd_services/common/attention.py`: query-chunked forward/backward when the per-sample
++  fp32 `[Hq, L, L]` scores would exceed `DSERVE_ATTN_SCORES_BYTES` (512 MB). Each query block sees only
++  keys `0..block_end`, which is the same math. 16K on a 32B TP4 shard: 125 ms/layer, +3.5 GiB peak
++  (the dense path would need ~64 GiB).
++- `deltaserve/bwd_services/common/head.py`: streaming head (online logsumexp over vocab chunks) above
++  `DSERVE_HEAD_LOGITS_BYTES` (2 GiB) of fp32 logits.
++- `deltaserve/bwd_services/common/trainer.py` + `ft_meta.py`: graphs captured at
++  `backward_cuda_graph_max_tokens`; `process_backward` runs a whole cycle eager when `n` exceeds it.
++
++**Gates:**
++- `tests/test_long_context_backward.py`: 26/26.
++- The 4 backward gradcheck suites (816 cases) pass both by default and forced onto the long paths
++  (`DSERVE_ATTN_SCORES_BYTES=2048 DSERVE_HEAD_LOGITS_BYTES=0`).
++- `tests/test_tp_bucket_optional_lora.py`: 49/49.
++- Runs are recorded in `EXPERIMENTS.md` (lc16k-a/b). Qwen3-32B TP4, 1.2K–14.9K-token samples:
++  14,867 tokens → 9.4 s eager; every batch's loss lower in epoch 1 than epoch 0.
++
++**Memory note:** vLLM's `gpu_memory_utilization` budget does NOT include the activation buffers.
++At 16K they are ~58 GB/rank on Qwen3-32B TP4 (all saves on), so the 16K YAML uses 0.42.
++
++---
++
+ ## Project tooling (consumes the above; not a vLLM change)
+ 
+ | Path | Role |
+@@ -786,6 +887,9 @@ arrival at the engine). No other engine-loop changes.
+ | `eval/auto_benchmark.py` | launches `vllm serve` (±`--co`), replays a request timeline, streams `/v1/completions` (ttft = first chunk), writes `timeline_results<suffix>.csv`. P4d/e: `--api-server-count N` (or YAML `server.api_server_count`) shards the frontend; reads `server.api_server_count` from the config. Writes `bench_meta<suffix>.json` with `t_first_wall_iso` for the plotter's t=0 anchor. **UnifiedFT**: `--scheduler {prefill,both}` (default `prefill`) selects the corresponding serving YAML via `_SCHED_CONFIGS`; output suffix is `_co_factor_<X>_phase_<Y>_<mode>` so A/B runs don't overwrite |
+ | `eval/auto_plot.py` | Single-row 4-panel per-mode figure (request timeline / E2E latency vs time / throughput / TTFT satisfaction). P4d: TTFT panel annotates avg/p90 TTFT + avg TBT (flagged vs `slo.{ttft_slo,avg_tbt_slo}`); E2E-latency panel overlays the inf-only (no-co) curve when its results exist. Loads `bench_meta<suffix>.json` (if present) and passes `t0_wall` to `parse_bwd_log_csv` so the FT series anchors at benchmark t=0. `--throughput-window` flag tunes the rolling-mean width on the throughput panel. (Earlier revision had a 5th E2E-latency-percentile panel; dropped at UnifiedFT — the percentile view lives in `auto_plot_schedulers.py`'s context.) |
+ | `eval/auto_plot_schedulers.py` | A/B comparison plotter for the UnifiedFT scheduler. Emits TWO PNGs centered on `phase=both`: `scheduler_compare_<mode>_factor_<tag>_both_vs_inf-only.png` (co-serving overhead vs no-co baseline) and `scheduler_compare_<mode>_factor_<tag>_both_vs_prefill.png` (head-to-head: `both` vs default `prefill` scheduler). Same 4-panel layout as `auto_plot.py`. Reuses `auto_plot.py` helpers (`parse_bwd_log_csv`, `_distribute_to_bins`, `_ft_per_bin`, `_smooth`, `plot_latency_vs_time`, `plot_request_timeline`, `read_slo`). Multi-series throughput panel uses per-run filled inference bands + hatched FT bands (cycling hatch patterns so overlaps stay readable) + per-run total dashed line, matching `auto_plot.plot_throughput_curves`'s visual identity. Multi-series TTFT-satisfaction panel folds per-run avg/p90 stats into a single combined text box. Prints every input file path as it resolves them so the user can see which runs landed on disk. Graceful degradation when a file is missing (`[plot] skip both_vs_X: phase=Y run not found`) |
++| `configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml`, `scripts/make_long_ft_corpus.py`, `long_ft_corpus.txt` | Stage LC: Qwen3-32B TP4 16K YAML (`max_model_len 20480`, `max_num_batched_tokens 16384`, `long_prefill_token_threshold 2048`, 16K buffer, `backward_batch_tokens 512`, graph rows 512, util 0.42) and the mixed short/long corpus builder (200 alpaca + 6 OpenR1-Math traces per bucket up to 16K tokens) |
++| `eval-rsi/{run_rsi_e2e.sh,rsi_traffic.py,traces_to_sft.py}`, `configs/serving_config_finetuning_qwen3_32b_tp4_rsi_e2e.yaml` | Stage RSI end-to-end loop on one server: ACE traffic with traces + timing, served traces → their data_v2 rows (+ `/ft/ingest`), the A/B/ingest/C/D orchestrator |
++| `eval-rsi/{run_ds_ace.sh,eval_ace.sh,compare_ace.py,train_lora_ace_targets.py}`, `configs/serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml`, `scripts/init_qwen3_lora_adapter.py` | Stage RSI: train an RSI-system ACE Finance adapter on DeltaServe (TP=4, stops at `final/`), evaluate any adapter with their exact protocol (stock vLLM 0.31, empty context), paired sign tests, their ACE trainer with a `--targets` flag (attention-only control), zero-B PEFT adapter init for any Qwen3 |
+ | `adapters/{opt125m,llama3}-toy-lora{,-ft}/` | the inference + FT adapters |
+ | `alpaca_1000.txt` | FT corpus |
+ | `tests/test_config_loader.py`, `test_finetuning_store.py`, `test_phase1_step2.py`, `test_phase1_step3.py`, `test_phase1_m1.py`, `test_phase1_m2.py`, `test_merged_estimator.py`, `test_profiling_shapes.py` | CPU/GPU verification |
+diff --git a/configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml b/configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml
+new file mode 100644
+index 0000000..474094c
+--- /dev/null
++++ b/configs/serving_config_finetuning_qwen3_32b_tp4_16k.yaml
+@@ -0,0 +1,89 @@
++# Qwen3-32B TP=4 on H200 with 16K context for BOTH inference and FT samples.
++# Derived from serving_config_finetuning_qwen3_32b_tp4_baselines.yaml; the
++# long-context differences:
++#   - model.max_model_len 20480: 16K prompts + room to generate.
++#   - engine.max_num_batched_tokens 16384: an FT sample prefills in ONE step
++#     (invariant 2), so the step budget must hold the longest sample.
++#     engine.long_prefill_token_threshold 2048 keeps INFERENCE prefill chunks
++#     small (FT requests are exempt — see v1/core/sched/scheduler.py).
++#   - finetune.max_saved_finetuning_tokens 16384: buffer holds one 16K sample
++#     (~3.5 MB/token/rank with every save on → ~58 GB/rank).
++#   - finetune.backward_batch_tokens 512: short samples still train in
++#     ~512-token batches; a longer sample is admitted alone into an empty buffer.
++#   - finetune.backward_cuda_graph_max_tokens 512: graphs captured for the
++#     short batches; long backwards run eager (chunked attention, streaming head).
++#   - profile_on_launch off for the first bring-up.
++finetune:
++  enable_finetuning: true
++  start_on_launch: false
++  backward_mps_percentage: 0
++  graph_ft_batches: true
++  graph_ft_max_tokens: 512
++  backward_run_ahead_boundaries: 2
++  finetuning_lora_path: ../adapters/qwen3-32b-qkv-r8-initial
++  data_path: ../long_ft_corpus.txt
++  max_saved_finetuning_tokens: 16384
++  backward_batch_tokens: 512
++  backward_cuda_graph_max_tokens: 512
++  num_epochs: 100
++  learning_rate: 0.0003
++  weight_decay: 0.01
++  gamma: 1.0
++  backward_fp32: false
++  forward_interruptible: true
++  ft_only_admission_grace_ms: 2.0
++  rps_throttle_enable: true
++  rps_throttle_close_rps: 5.0
++  rps_throttle_open_rps: 2.0
++  rps_throttle_window_s: 0.1
++  rps_throttle_close_time: 1.0
++  fwd_token_throttle_enable: true
++  fwd_token_throttle: 0
++  pause_prefill_always: true
++  backward_cuda_graph: true
++  backward_cuda_graph_attn_bn_max: 28
++  backward_cuda_graph_attn_l_max: 64
++  save_attn_qkv: true
++  save_attn_ctx: true
++  save_resid_mid: true
++slo:
++  ttft_slo: 0.3
++  avg_tbt_slo: 0.02
++  max_tbt_slo: 0.05
++  profile_on_launch: false
++  profile_num_repeats: 2
++  ft_tokens_admission_constrain_factor: 0.0
++  match_prefill_workload_factor: 0
++  decode_only_ft_safety_margin: 0.7
++debug:
++  print_weight_hash: false
++  print_activation_hash: false
++  print_scheduler_add: false
++  print_engine_batch_exec: false
++  print_engine_batch_done: false
++  print_engine_req_recv: false
++adapters:
++  lora_path_0: ../adapters/qwen3-32b-qkv-r8-initial
++lora:
++  enable_lora: true
++  max_loras: 2
++  max_lora_rank: 8
++server:
++  host: 127.0.0.1
++  port: 8000
++  api_server_count: 1
++model:
++  model: /mnt/weka/home/jianshu.she/scratch/Qwen3-32B
++  tokenizer_mode: auto
++  trust_remote_code: false
++  dtype: bfloat16
++  max_model_len: 20480
++engine:
++  gpu_memory_utilization: 0.42   # vLLM budget EXCLUDES the ~58 GB 16K activation buffers + backward child (~15 GB)
++  enforce_eager: false
++  disable_log_stats: true
++  seed: 0
++  max_num_batched_tokens: 16384
++  long_prefill_token_threshold: 2048
++parallel:
++  tensor_parallel_size: 4
+diff --git a/configs/serving_config_finetuning_qwen3_32b_tp4_baselines.yaml b/configs/serving_config_finetuning_qwen3_32b_tp4_baselines.yaml
+new file mode 100644
+index 0000000..a00bd08
+--- /dev/null
++++ b/configs/serving_config_finetuning_qwen3_32b_tp4_baselines.yaml
+@@ -0,0 +1,74 @@
++# Qwen3-32B comparison with DeltaServe-Baselines on four H200 GPUs.
++# The 1,000 samples are 18-63 tokens: a 512-token pool fits at most 28 samples.
++# Validated on full x2 loose/tight with TTFT <= 300 ms for every request.
++finetune:
++  enable_finetuning: true
++  start_on_launch: false
++  backward_mps_percentage: 0
++  graph_ft_batches: true
++  graph_ft_max_tokens: 512
++  backward_run_ahead_boundaries: 2
++  finetuning_lora_path: ../adapters/qwen3-32b-qkv-r8-initial
++  data_path: ../../DeltaServe-Baselines/common/data/alpaca.txt
++  max_saved_finetuning_tokens: 512
++  num_epochs: 10000
++  learning_rate: 0.0003
++  weight_decay: 0.01
++  gamma: 1.0
++  backward_fp32: false
++  forward_interruptible: true
++  ft_only_admission_grace_ms: 2.0
++  rps_throttle_enable: true
++  rps_throttle_close_rps: 5.0
++  rps_throttle_open_rps: 2.0
++  rps_throttle_window_s: 0.1
++  rps_throttle_close_time: 1.0
++  fwd_token_throttle_enable: true
++  fwd_token_throttle: 0
++  pause_prefill_always: true
++  backward_cuda_graph: true
++  backward_cuda_graph_attn_bn_max: 28
++  backward_cuda_graph_attn_l_max: 64
++  save_attn_qkv: true
++  save_attn_ctx: true
++  save_resid_mid: true
++slo:
++  ttft_slo: 0.3
++  avg_tbt_slo: 0.02
++  max_tbt_slo: 0.05
++  profile_on_launch: true
++  profile_num_repeats: 2
++  ft_tokens_admission_constrain_factor: 0.0
++  match_prefill_workload_factor: 0
++  decode_only_ft_safety_margin: 0.7
++debug:
++  print_weight_hash: false
++  print_activation_hash: false
++  print_scheduler_add: false
++  print_engine_batch_exec: false
++  print_engine_batch_done: false
++  print_engine_req_recv: false
++adapters:
++  lora_path_0: ../adapters/qwen3-32b-qkv-r8-initial
++lora:
++  enable_lora: true
++  max_loras: 2
++  max_lora_rank: 8
++server:
++  host: 127.0.0.1
++  port: 8000
++  api_server_count: 1
++model:
++  model: /mnt/weka/home/jianshu.she/scratch/Qwen3-32B
++  tokenizer_mode: auto
++  trust_remote_code: false
++  dtype: bfloat16
++  max_model_len: 2048
++engine:
++  gpu_memory_utilization: 0.45
++  enforce_eager: false
++  disable_log_stats: true
++  seed: 0
++  max_num_batched_tokens: 512
++parallel:
++  tensor_parallel_size: 4
+diff --git a/configs/serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml b/configs/serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml
+new file mode 100644
+index 0000000..fb06fbf
+--- /dev/null
++++ b/configs/serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml
+@@ -0,0 +1,86 @@
++# RSI-system ACE Finance (Formula / FiNER) LoRA SFT on DeltaServe: Qwen3-32B with the YaRN x4 config
++# (RSI-system's MODEL_DIR), TP=4 on H200. Derived from serving_config_finetuning_qwen3_32b_tp4_16k.yaml.
++#   - data_path: RSI-system chat JSONL (sft/data_v2/<task>.jsonl), rendered exactly like their ACE trainer
++#     (chat_loss_on: ace, thinking off; loss on assistant tokens only).
++#   - recipe vs theirs (r16 / alpha 32, lr 1e-4, 2 epochs, ~32k tokens/step): same rank/alpha/lr/epochs, but
++#     attention-only LoRA (q,k,v,o — the backward does not train the MLP), 16k tokens per backward
++#     (buffer limit at TP4), constant LR (no cosine/warmup), no dropout, no held-out dev rows.
++#   - the trained adapter is exported (PEFT dir) to adapter_save_dir/{cycle<N>,latest,final}.
++finetune:
++  enable_finetuning: true
++  start_on_launch: false
++  backward_mps_percentage: 0
++  graph_ft_batches: true
++  graph_ft_max_tokens: 512
++  backward_run_ahead_boundaries: 2
++  finetuning_lora_path: ../adapters/qwen3-32b-qkvo-r16-initial
++  data_path: /mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/sft/data_v2/formula.jsonl
++  max_saved_finetuning_tokens: 16384
++  backward_batch_tokens: 16384
++  chat_loss_on: ace                 # RSI-system ACE trainer rendering (thinking off, loss on assistant tokens)
++  chat_thinking: "off"
++  adapter_save_dir: /mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM/eval-rsi/adapters/formula
++  adapter_save_every: 20
++  backward_cuda_graph_max_tokens: 512
++  num_epochs: 2
++  learning_rate: 0.0001
++  weight_decay: 0.0
++  gamma: 1.0
++  backward_fp32: false
++  forward_interruptible: true
++  ft_only_admission_grace_ms: 2.0
++  rps_throttle_enable: true
++  rps_throttle_close_rps: 5.0
++  rps_throttle_open_rps: 2.0
++  rps_throttle_window_s: 0.1
++  rps_throttle_close_time: 1.0
++  fwd_token_throttle_enable: true
++  fwd_token_throttle: 0
++  pause_prefill_always: true
++  backward_cuda_graph: true
++  backward_cuda_graph_attn_bn_max: 28
++  backward_cuda_graph_attn_l_max: 64
++  save_attn_qkv: true
++  save_attn_ctx: true
++  save_resid_mid: true
++slo:
++  ttft_slo: 0.3
++  avg_tbt_slo: 0.02
++  max_tbt_slo: 0.05
++  profile_on_launch: false
++  profile_num_repeats: 2
++  ft_tokens_admission_constrain_factor: 0.0
++  match_prefill_workload_factor: 0
++  decode_only_ft_safety_margin: 0.7
++debug:
++  print_weight_hash: false
++  print_activation_hash: false
++  print_scheduler_add: false
++  print_engine_batch_exec: false
++  print_engine_batch_done: false
++  print_engine_req_recv: false
++adapters:
++  lora_path_0: ../adapters/qwen3-32b-qkvo-r16-initial
++lora:
++  enable_lora: true
++  max_loras: 2
++  max_lora_rank: 16
++server:
++  host: 127.0.0.1
++  port: 8000
++  api_server_count: 1
++model:
++  model: /mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/models/Qwen3-32B-yarn131k
++  tokenizer_mode: auto
++  trust_remote_code: false
++  dtype: bfloat16
++  max_model_len: 20480
++engine:
++  gpu_memory_utilization: 0.42   # vLLM budget EXCLUDES the ~58 GB 16K activation buffers + backward child (~15 GB)
++  enforce_eager: false
++  disable_log_stats: true
++  seed: 0
++  max_num_batched_tokens: 16384
++  long_prefill_token_threshold: 2048
++parallel:
++  tensor_parallel_size: 4
+diff --git a/configs/serving_config_finetuning_qwen3_32b_tp4_rsi_e2e.yaml b/configs/serving_config_finetuning_qwen3_32b_tp4_rsi_e2e.yaml
+new file mode 100644
+index 0000000..810aae8
+--- /dev/null
++++ b/configs/serving_config_finetuning_qwen3_32b_tp4_rsi_e2e.yaml
+@@ -0,0 +1,87 @@
++# End-to-end RSI on DeltaServe (ACE Formula): ONE server serves the user traffic, its traces become SFT rows
++# (POST /ft/ingest), and the LoRA trains in the inference gaps; see eval-rsi/run_rsi_e2e.sh.
++# Same model/recipe as serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml, except:
++#   - data_path null: the server starts with NO corpus; data arrives from its own traces at runtime.
++#   - profile_on_launch true: SLO-aware FT admission from the start (this is a co-serving run).
++#   - max_model_len 40960: the ACE prompts with the learned playbook are ~30.5K tokens (shared prefix,
++#     prefix-cached).
++#   - fwd_token_throttle_enable / pause_prefill_always off: the standard DeltaServe policy (backward yields to
++#     prefills, time-slices with decode), not the strict baselines throttle.
++finetune:
++  enable_finetuning: true
++  start_on_launch: false
++  backward_mps_percentage: 0
++  graph_ft_batches: true
++  graph_ft_max_tokens: 512
++  backward_run_ahead_boundaries: 2
++  finetuning_lora_path: ../adapters/qwen3-32b-qkvo-r16-initial
++  data_path: null
++  max_saved_finetuning_tokens: 16384
++  backward_batch_tokens: 16384
++  chat_loss_on: ace                 # RSI-system ACE trainer rendering (thinking off, loss on assistant tokens)
++  chat_thinking: "off"
++  adapter_save_dir: /mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM/eval-rsi/e2e/adapters
++  adapter_save_every: 10
++  backward_cuda_graph_max_tokens: 512
++  num_epochs: 2
++  learning_rate: 0.0001
++  weight_decay: 0.0
++  gamma: 1.0
++  backward_fp32: false
++  forward_interruptible: true
++  ft_only_admission_grace_ms: 2.0
++  rps_throttle_enable: true
++  rps_throttle_close_rps: 5.0
++  rps_throttle_open_rps: 2.0
++  rps_throttle_window_s: 0.1
++  rps_throttle_close_time: 1.0
++  fwd_token_throttle_enable: false   # standard co-serving: pause the backward on prefills only (the strict 0-token throttle would starve FT under continuous decode)
++  fwd_token_throttle: 0
++  pause_prefill_always: false
++  backward_cuda_graph: true
++  backward_cuda_graph_attn_bn_max: 28
++  backward_cuda_graph_attn_l_max: 64
++  save_attn_qkv: true
++  save_attn_ctx: true
++  save_resid_mid: true
++slo:
++  ttft_slo: 0.3
++  avg_tbt_slo: 0.02
++  max_tbt_slo: 0.05
++  profile_on_launch: true
++  profile_num_repeats: 2
++  ft_tokens_admission_constrain_factor: 0.0
++  match_prefill_workload_factor: 0
++  decode_only_ft_safety_margin: 0.7
++debug:
++  print_weight_hash: false
++  print_activation_hash: false
++  print_scheduler_add: false
++  print_engine_batch_exec: false
++  print_engine_batch_done: false
++  print_engine_req_recv: false
++adapters:
++  lora_path_0: ../adapters/qwen3-32b-qkvo-r16-initial
++lora:
++  enable_lora: true
++  max_loras: 2
++  max_lora_rank: 16
++server:
++  host: 127.0.0.1
++  port: 8000
++  api_server_count: 1
++model:
++  model: /mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/models/Qwen3-32B-yarn131k
++  tokenizer_mode: auto
++  trust_remote_code: false
++  dtype: bfloat16
++  max_model_len: 40960
++engine:
++  gpu_memory_utilization: 0.42   # vLLM budget EXCLUDES the ~58 GB 16K activation buffers + backward child (~15 GB)
++  enforce_eager: false
++  disable_log_stats: true
++  seed: 0
++  max_num_batched_tokens: 16384
++  long_prefill_token_threshold: 2048
++parallel:
++  tensor_parallel_size: 4
 diff --git a/dserve-vllm/vllm/config/finetune.py b/dserve-vllm/vllm/config/finetune.py
 index 7d6d4be..2fc3157 100644
 --- a/dserve-vllm/vllm/config/finetune.py
@@ -750,6 +1590,124 @@ index c875eaf..4704692 100644
      def _publish_to_served(self) -> None:
          """Write the trained fp32 master into vLLM's served LoRA stacked buffers
          (DeltaServe's load-time refresh): per (layer, proj), clamp + cast to the
+diff --git a/dserve-vllm/vllm/deltaserve/chat_sft.py b/dserve-vllm/vllm/deltaserve/chat_sft.py
+new file mode 100644
+index 0000000..d400a7a
+--- /dev/null
++++ b/dserve-vllm/vllm/deltaserve/chat_sft.py
+@@ -0,0 +1,112 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++"""Chat SFT rows -> (token ids, loss spans), matching RSI-system's trainers.
++
++RSI-system (github.com/Jianshu-She/RSI-system) turns agent traces into chat
++JSONL (``{"messages": [...]}`` per line, ``rsi/finetune/DATA_FORMAT.md``) and
++trains on the assistant tokens only. The co-served trainer must see exactly the
++tokens and targets those offline trainers do, so this module ports their
++``encode`` functions:
++
++* ``"last"`` / ``"all"`` — ``rsi/finetune/train_lora.py`` (``--loss_on``,
++  ``--thinking``).
++* ``"ace"`` — ``benchmarks/ace/.../train_lora.py`` (thinking off; skips the
++  AppWorld few-shot demo dialogue; equals ``"all"`` + thinking off on
++  single-turn rows except for the prompt rendering of the first turn).
++
++A span ``(s, e)`` marks target token positions ``s .. e-1``: the loss is the
++next-token cross-entropy of predicting ``ids[j]`` from position ``j - 1`` for
++every ``j`` in a span.
++"""
++
++THINK_OFF = "<think>\n\n</think>\n\n"
++LOSS_ON = ("last", "all", "ace")
++
++
++def encode_chat(tok, messages: list[dict], loss_on: str = "all",
++                thinking: str = "off") -> tuple[list[int], list[tuple[int, int]]]:
++    """Return ``(ids, spans)``; ``spans`` is empty when the row has no usable
++    target (the caller drops it, as the offline trainers do)."""
++    if loss_on not in LOSS_ON:
++        raise ValueError(f"chat_loss_on must be one of {LOSS_ON}, got {loss_on!r}")
++    if thinking not in ("on", "off"):
++        raise ValueError(f"chat_thinking must be 'on' or 'off', got {thinking!r}")
++    if loss_on == "ace":
++        return _encode_ace(tok, messages)
++    tmpl = {} if thinking == "on" else {"enable_thinking": False}
++
++    if loss_on == "last":
++        # One target turn: prompt = the template's generation prompt for the
++        # history, exactly as at inference.
++        pre = _ids(tok.apply_chat_template(messages[:-1], tokenize=True,
++                                           add_generation_prompt=True, **tmpl))
++        full = _ids(tok.apply_chat_template(messages, tokenize=True,
++                                            add_generation_prompt=False, **tmpl))
++        if full[:len(pre)] == pre and len(full) > len(pre):
++            return full, [(len(pre), len(full))]
++        return full, []
++
++    # Every assistant turn, built turn by turn with the prefix the model was
++    # conditioned on when it generated that turn.
++    ids: list[int] = []
++    spans: list[tuple[int, int]] = []
++    nl = tok.encode("\n", add_special_tokens=False)
++    for m in messages:
++        role = m["role"]
++        if role not in ("system", "user", "assistant"):
++            raise ValueError(f"chat_loss_on='all' supports system/user/assistant, got {role}")
++        if role == "assistant":
++            ids += tok.encode("<|im_start|>assistant\n"
++                              + (THINK_OFF if thinking == "off" else ""),
++                              add_special_tokens=False)
++            body = tok.encode(m["content"] + "<|im_end|>", add_special_tokens=False)
++            spans.append((len(ids), len(ids) + len(body)))
++            ids += body + nl
++        else:
++            ids += tok.encode(f"<|im_start|>{role}\n{m['content']}<|im_end|>\n",
++                              add_special_tokens=False)
++    return ids, spans
++
++
++def _encode_ace(tok, messages: list[dict]):
++    """The ACE trainer's encode: the official template (thinking off) up to the
++    first assistant turn after the task start, then every later turn appended
++    by hand; loss on each assistant content + ``<|im_end|>``. AppWorld prompts
++    carry a few-shot demo dialogue — the task starts at the last user turn
++    saying "solve the actual task", and nothing before it is a target."""
++    start = max([i for i, m in enumerate(messages)
++                 if m["role"] == "user" and "solve the actual task" in m["content"]]
++                or [0])
++    first = next((i for i, m in enumerate(messages)
++                  if m["role"] == "assistant" and i > start), None)
++    if first is None:
++        return [], []
++    ids = tok.encode(tok.apply_chat_template(messages[:first], tokenize=False,
++                                             add_generation_prompt=True,
++                                             enable_thinking=False),
++                     add_special_tokens=False)
++    end = tok.convert_tokens_to_ids("<|im_end|>")
++    nl = tok.encode("\n", add_special_tokens=False)
++    spans: list[tuple[int, int]] = []
++    for i in range(first, len(messages)):
++        m = messages[i]
++        if m["role"] == "assistant":
++            if i != first:
++                ids += tok.encode("<|im_start|>assistant\n" + THINK_OFF,
++                                  add_special_tokens=False)
++            t = tok.encode(m["content"], add_special_tokens=False) + [end]
++            spans.append((len(ids), len(ids) + len(t)))
++            ids += t + nl
++        else:
++            ids += tok.encode(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n",
++                              add_special_tokens=False)
++    return ids, spans
++
++
++def _ids(x) -> list[int]:
++    """``apply_chat_template(tokenize=True)`` returns a list on transformers 4.x
++    and a BatchEncoding-like mapping on 5.x."""
++    if isinstance(x, dict) or hasattr(x, "keys"):
++        x = x["input_ids"]
++    return list(x)
 diff --git a/dserve-vllm/vllm/deltaserve/coordinator.py b/dserve-vllm/vllm/deltaserve/coordinator.py
 index ca6b900..f739da4 100644
 --- a/dserve-vllm/vllm/deltaserve/coordinator.py
@@ -1712,139 +2670,959 @@ index c196baf..764e968 100644
          return CompilationTimes(
              language_model=self.compilation_config.compilation_time,
              encoder=self.compilation_config.encoder_compilation_time,
-diff --git a/tests/test_tp_trainer_graph_nccl.py b/tests/test_tp_trainer_graph_nccl.py
-index a9bbc04..8867fa3 100644
---- a/tests/test_tp_trainer_graph_nccl.py
-+++ b/tests/test_tp_trainer_graph_nccl.py
-@@ -168,6 +168,10 @@ def make_meta(fam_name, *, tp_size, tp_rank, port, graph, save_rm=False):
- 
- def make_service(fam_name, base, ft, meta, device):
-     svc = SERVICES[fam_name](device.index if device.type == "cuda" else 0)
-+    if device.type == "cpu":
-+        # The gloo regression tests reuse this harness without a CUDA device.
-+        # Run-ahead throttling records CUDA events and only applies on GPUs.
-+        meta = dict(meta, backward_run_ahead_boundaries=0)
-     svc.shared = {"base": {k: v.to(device) for k, v in base.items()},
-                   "ft": {k: v.to(device) for k, v in ft.items()},
-                   "meta": meta}
-diff --git a/dserve-vllm/vllm/deltaserve/chat_sft.py b/dserve-vllm/vllm/deltaserve/chat_sft.py
+diff --git a/eval-rsi/compare_ace.py b/eval-rsi/compare_ace.py
 new file mode 100644
-index 0000000..d400a7a
+index 0000000..8f2e2eb
 --- /dev/null
-+++ b/dserve-vllm/vllm/deltaserve/chat_sft.py
-@@ -0,0 +1,112 @@
-+# SPDX-License-Identifier: Apache-2.0
-+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++++ b/eval-rsi/compare_ace.py
+@@ -0,0 +1,46 @@
++"""Paired comparison of ACE Finance test evals (eval-rsi/eval/eval_<tag>.json).
 +
-+"""Chat SFT rows -> (token ids, loss spans), matching RSI-system's trainers.
++Per-item correctness comes from each file's error list (indices of wrong items); the
++test is RSI-system's: a two-sided sign test on the items where the two runs disagree.
 +
-+RSI-system (github.com/Jianshu-She/RSI-system) turns agent traces into chat
-+JSONL (``{"messages": [...]}`` per line, ``rsi/finetune/DATA_FORMAT.md``) and
-+trains on the assistant tokens only. The co-served trainer must see exactly the
-+tokens and targets those offline trainers do, so this module ports their
-+``encode`` functions:
-+
-+* ``"last"`` / ``"all"`` — ``rsi/finetune/train_lora.py`` (``--loss_on``,
-+  ``--thinking``).
-+* ``"ace"`` — ``benchmarks/ace/.../train_lora.py`` (thinking off; skips the
-+  AppWorld few-shot demo dialogue; equals ``"all"`` + thinking off on
-+  single-turn rows except for the prompt rendering of the first turn).
-+
-+A span ``(s, e)`` marks target token positions ``s .. e-1``: the loss is the
-+next-token cross-entropy of predicting ``ids[j]`` from position ``j - 1`` for
-+every ``j`` in a span.
++    python eval-rsi/compare_ace.py formula base ctrl ds    # rows: tags; pairs vs the first tag and ds vs ctrl
 +"""
++import json
++import math
++import os
++import sys
 +
-+THINK_OFF = "<think>\n\n</think>\n\n"
-+LOSS_ON = ("last", "all", "ace")
++EVAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval")
 +
 +
-+def encode_chat(tok, messages: list[dict], loss_on: str = "all",
-+                thinking: str = "off") -> tuple[list[int], list[tuple[int, int]]]:
-+    """Return ``(ids, spans)``; ``spans`` is empty when the row has no usable
-+    target (the caller drops it, as the offline trainers do)."""
-+    if loss_on not in LOSS_ON:
-+        raise ValueError(f"chat_loss_on must be one of {LOSS_ON}, got {loss_on!r}")
-+    if thinking not in ("on", "off"):
-+        raise ValueError(f"chat_thinking must be 'on' or 'off', got {thinking!r}")
-+    if loss_on == "ace":
-+        return _encode_ace(tok, messages)
-+    tmpl = {} if thinking == "on" else {"enable_thinking": False}
++def load(task, tag):
++    d = json.load(open(os.path.join(EVAL, f"eval_{tag}_{task}.json")))
++    total = d["results"]["total"]
++    wrong = {e["index"] for e in d["errors"]["errors"]}
++    return total, [i not in wrong for i in range(total)], d["results"]["accuracy"]
 +
-+    if loss_on == "last":
-+        # One target turn: prompt = the template's generation prompt for the
-+        # history, exactly as at inference.
-+        pre = _ids(tok.apply_chat_template(messages[:-1], tokenize=True,
-+                                           add_generation_prompt=True, **tmpl))
-+        full = _ids(tok.apply_chat_template(messages, tokenize=True,
-+                                            add_generation_prompt=False, **tmpl))
-+        if full[:len(pre)] == pre and len(full) > len(pre):
-+            return full, [(len(pre), len(full))]
-+        return full, []
 +
-+    # Every assistant turn, built turn by turn with the prefix the model was
-+    # conditioned on when it generated that turn.
-+    ids: list[int] = []
-+    spans: list[tuple[int, int]] = []
-+    nl = tok.encode("\n", add_special_tokens=False)
-+    for m in messages:
-+        role = m["role"]
-+        if role not in ("system", "user", "assistant"):
-+            raise ValueError(f"chat_loss_on='all' supports system/user/assistant, got {role}")
-+        if role == "assistant":
-+            ids += tok.encode("<|im_start|>assistant\n"
-+                              + (THINK_OFF if thinking == "off" else ""),
-+                              add_special_tokens=False)
-+            body = tok.encode(m["content"] + "<|im_end|>", add_special_tokens=False)
-+            spans.append((len(ids), len(ids) + len(body)))
-+            ids += body + nl
++def sign_test(a, b):
++    win = sum(x and not y for x, y in zip(a, b))
++    loss = sum(y and not x for x, y in zip(a, b))
++    n = win + loss
++    if n == 0:
++        return win, loss, 1.0
++    k = min(win, loss)
++    p = min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
++    return win, loss, p
++
++
++def main():
++    task, tags = sys.argv[1], sys.argv[2:]
++    runs = {t: load(task, t) for t in tags if os.path.exists(os.path.join(EVAL, f"eval_{t}_{task}.json"))}
++    print(f"{task}: " + ", ".join(f"{t} {100 * acc:.1f} (n={tot})" for t, (tot, _, acc) in runs.items()))
++    ref = tags[0]
++    pairs = [(t, ref) for t in runs if t != ref] + ([("ds", "ctrl")] if {"ds", "ctrl"} <= set(runs) else [])
++    for a, b in pairs:
++        w, l, p = sign_test(runs[a][1], runs[b][1])
++        print(f"  {a} vs {b}: +{w}/-{l}, sign-test p={p:.4f}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/eval-rsi/eval_ace.sh b/eval-rsi/eval_ace.sh
+new file mode 100755
+index 0000000..36503db
+--- /dev/null
++++ b/eval-rsi/eval_ace.sh
+@@ -0,0 +1,23 @@
++#!/bin/bash
++# One ACE Finance test-split eval with RSI-system's exact protocol (their job_lora_eval_finance.sbatch):
++# stock vLLM 0.31, Qwen3-32B YaRN x4 config, TP=1, temp 0 (eval_split.py), EMPTY playbook context.
++# Usage: eval-rsi/eval_ace.sh <gpu> <port> <formula|finer> <tag> [adapter_dir]
++set -u
++GPU=$1; PORT=$2; TASK=$3; TAG=$4; ADAPTER=${5:-}
++ACE=/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE
++VLLM=/mnt/weka/home/jianshu.she/RSI-system/benchmark/reasoningbank/envs/vllm/bin/vllm
++MODEL=$ACE/models/Qwen3-32B-yarn131k
++OUT=/mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM/eval-rsi/eval; mkdir -p $OUT/logs
++export no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
++LORA=(); NAME=qwen3-32b
++if [ -n "$ADAPTER" ]; then LORA=(--enable-lora --max-lora-rank 16 --max-loras 1 --lora-modules "$TAG=$ADAPTER"); NAME=$TAG; fi
++CUDA_VISIBLE_DEVICES=$GPU setsid $VLLM serve $MODEL --served-model-name qwen3-32b --port $PORT --host 127.0.0.1 \
++  --max-model-len 131072 --gpu-memory-utilization 0.90 --enable-prefix-caching --max-num-seqs 64 \
++  --override-generation-config '{"max_new_tokens": 8192}' "${LORA[@]}" > $OUT/logs/vllm_$TAG.log 2>&1 &
++S=$!
++until curl -s 127.0.0.1:$PORT/v1/models | grep -q "\"$NAME\""; do sleep 10; kill -0 $S 2>/dev/null || { echo "vllm died ($TAG)"; exit 1; }; done
++cd $ACE/ace
++LOCAL_LLM_URL=http://127.0.0.1:$PORT/v1 EVAL_MODEL=$NAME .venv/bin/python ../baselines/eval_split.py $TASK test \
++  $ACE/sft/empty_context.txt $OUT/eval_$TAG.json > $OUT/logs/eval_$TAG.log 2>&1
++echo "$(date '+%T') $(grep RESULT $OUT/logs/eval_$TAG.log) [$TAG]"
++kill -INT -$S 2>/dev/null; sleep 15; kill -KILL -$S 2>/dev/null
+diff --git a/eval-rsi/rsi_traffic.py b/eval-rsi/rsi_traffic.py
+new file mode 100644
+index 0000000..19f903e
+--- /dev/null
++++ b/eval-rsi/rsi_traffic.py
+@@ -0,0 +1,117 @@
++"""ACE Finance "user traffic" against an OpenAI-compatible server, with traces.
++
++Builds each request exactly like ACE's Generator (GENERATOR_PROMPT, temperature 0, thinking off),
++streams it to measure TTFT / end-to-end latency, and scores it with ACE's own extract_answer +
++DataProcessor.answer_is_correct. One JSONL record per request: the full prompt + response (the
++trace), correctness, and timing. Run with the ACE venv python from the ACE upstream dir:
++
++  cd $ACE/ace && .venv/bin/python /path/eval-rsi/rsi_traffic.py --url http://127.0.0.1:8000/v1 \
++      --model llama3 --task formula --split train --context $ACE/results/.../best_playbook.txt \
++      --concurrency 16 --out traces.jsonl
++  # open-loop Poisson arrivals instead of a closed loop:  --rps 0.5 [--duration 600] [--loops 3]
++"""
++import argparse
++import asyncio
++import json
++import os
++import random
++import sys
++import time
++
++sys.path.insert(0, os.getcwd())
++from openai import AsyncOpenAI  # noqa: E402
++
++from ace.prompts.generator import GENERATOR_PROMPT  # noqa: E402
++from eval.finance.data_processor import DataProcessor  # noqa: E402
++from utils import extract_answer  # noqa: E402
++
++
++def load_samples(task, split):
++    cfg = json.load(open("./eval/finance/data/sample_config.json"))[task]
++    key = {"train": "train_data", "val": "val_data", "test": "test_data"}[split]
++    proc = DataProcessor(task)
++    return proc, proc.process_task_data([json.loads(l) for l in open(cfg[key])])
++
++
++async def one(client, args, proc, playbook, i, s, out, lock, stats):
++    prompt = GENERATOR_PROMPT.format(playbook, "(empty)", s["question"], s["context"])
++    t0 = time.time()
++    ttft = None
++    parts = []
++    try:
++        stream = await client.chat.completions.create(
++            model=args.model, messages=[{"role": "user", "content": prompt}],
++            temperature=0.0, max_tokens=args.max_tokens, stream=True,
++            extra_body={"chat_template_kwargs": {"enable_thinking": False}})
++        async for ch in stream:
++            if ch.choices and ch.choices[0].delta.content:
++                if ttft is None:
++                    ttft = time.time() - t0
++                parts.append(ch.choices[0].delta.content)
++        err = None
++    except Exception as e:  # keep the run alive; the record says what failed
++        err = repr(e)
++    e2e = time.time() - t0
++    resp = "".join(parts)
++    ans = extract_answer(resp) if resp else None
++    correct = bool(resp) and proc.answer_is_correct(ans, s["target"])
++    rec = {"index": i, "task": args.task, "split": args.split, "t_send": t0, "ttft": ttft,
++           "e2e": e2e, "correct": correct, "error": err, "prompt": prompt, "response": resp,
++           "question": s["question"], "context": s["context"], "target": s["target"]}
++    async with lock:
++        out.write(json.dumps(rec) + "\n")
++        out.flush()
++        stats["n"] += 1
++        stats["ok"] += correct
++
++
++async def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--url", required=True)
++    ap.add_argument("--model", required=True)
++    ap.add_argument("--task", required=True)
++    ap.add_argument("--split", default="test")
++    ap.add_argument("--context", default="", help="playbook file (empty = '(empty)')")
++    ap.add_argument("--concurrency", type=int, default=0, help="closed loop with N workers")
++    ap.add_argument("--rps", type=float, default=0.0, help="open-loop Poisson arrival rate")
++    ap.add_argument("--loops", type=int, default=1, help="passes over the split (open loop)")
++    ap.add_argument("--duration", type=float, default=0.0, help="stop sending after N s (open loop)")
++    ap.add_argument("--stop-file", default="", help="stop sending once this file exists (open loop)")
++    ap.add_argument("--limit", type=int, default=0)
++    ap.add_argument("--max-tokens", type=int, default=4096)
++    ap.add_argument("--seed", type=int, default=0)
++    ap.add_argument("--out", required=True)
++    args = ap.parse_args()
++    proc, samples = load_samples(args.task, args.split)
++    if args.limit:
++        samples = samples[: args.limit]
++    playbook = open(args.context).read() if args.context else "(empty)"
++    client = AsyncOpenAI(base_url=args.url, api_key="x", timeout=3600)
++    lock, stats = asyncio.Lock(), {"n": 0, "ok": 0}
++    t_start = time.time()
++    with open(args.out, "a") as out:
++        if args.concurrency:
++            sem = asyncio.Semaphore(args.concurrency)
++
++            async def bounded(i, s):
++                async with sem:
++                    await one(client, args, proc, playbook, i, s, out, lock, stats)
++            await asyncio.gather(*(bounded(i, s) for i, s in enumerate(samples)))
 +        else:
-+            ids += tok.encode(f"<|im_start|>{role}\n{m['content']}<|im_end|>\n",
-+                              add_special_tokens=False)
-+    return ids, spans
++            rng = random.Random(args.seed)
++            tasks = []
++            for _ in range(max(1, args.loops)):
++                for i, s in enumerate(samples):
++                    if args.duration and time.time() - t_start > args.duration:
++                        break
++                    if args.stop_file and os.path.exists(args.stop_file):
++                        break
++                    tasks.append(asyncio.create_task(one(client, args, proc, playbook, i, s, out, lock, stats)))
++                    await asyncio.sleep(rng.expovariate(args.rps))
++            await asyncio.gather(*tasks)
++    print(f"RESULT {args.task} {args.split}: {stats['ok']}/{stats['n']} correct "
++          f"({100 * stats['ok'] / max(1, stats['n']):.1f}%), {time.time() - t_start:.0f}s")
 +
 +
-+def _encode_ace(tok, messages: list[dict]):
-+    """The ACE trainer's encode: the official template (thinking off) up to the
-+    first assistant turn after the task start, then every later turn appended
-+    by hand; loss on each assistant content + ``<|im_end|>``. AppWorld prompts
-+    carry a few-shot demo dialogue — the task starts at the last user turn
-+    saying "solve the actual task", and nothing before it is a target."""
-+    start = max([i for i, m in enumerate(messages)
-+                 if m["role"] == "user" and "solve the actual task" in m["content"]]
-+                or [0])
-+    first = next((i for i, m in enumerate(messages)
-+                  if m["role"] == "assistant" and i > start), None)
-+    if first is None:
-+        return [], []
-+    ids = tok.encode(tok.apply_chat_template(messages[:first], tokenize=False,
-+                                             add_generation_prompt=True,
-+                                             enable_thinking=False),
-+                     add_special_tokens=False)
-+    end = tok.convert_tokens_to_ids("<|im_end|>")
++if __name__ == "__main__":
++    asyncio.run(main())
+diff --git a/eval-rsi/run_ds_ace.sh b/eval-rsi/run_ds_ace.sh
+new file mode 100755
+index 0000000..1a1f7e6
+--- /dev/null
++++ b/eval-rsi/run_ds_ace.sh
+@@ -0,0 +1,38 @@
++#!/bin/bash
++# Train an RSI-system ACE Finance adapter with DeltaServe (TP=4, training only) and stop once
++# eval-rsi/adapters/<task>/final is exported.   Usage: CUDA_VISIBLE_DEVICES=0,1,2,3 eval-rsi/run_ds_ace.sh <formula|finer>
++set -u
++ROOT=/mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM; cd $ROOT
++ENV=/mnt/weka/home/jianshu.she/miniconda3/envs/dserve-vllm
++export FLASHINFER_WORKSPACE_BASE=$HOME/.cache/flashinfer-dserve CUDA_HOME=/usr/local/cuda-13.2 \
++       PATH=/usr/local/cuda-13.2/bin:$ENV/bin:$PATH HF_HUB_OFFLINE=1 no_proxy=localhost,127.0.0.1
++T=$1; PORT=${PORT:-8000}
++OUT=$ROOT/eval-rsi/adapters/$T; LOG=$ROOT/eval-rsi/logs; mkdir -p $LOG; rm -rf $OUT
++CFG=$ROOT/configs/.gen_rsi_ace_$T.yaml
++sed -e "s#sft/data_v2/formula.jsonl#sft/data_v2/$T.jsonl#" -e "s#eval-rsi/adapters/formula#eval-rsi/adapters/$T#" \
++    -e "s#^  adapter_save_every: 20#  adapter_save_every: 20\n  bwd_log_path: $LOG/bwd_$T.csv#" \
++    configs/serving_config_finetuning_qwen3_32b_tp4_rsi_ace.yaml > $CFG
++rm -f $LOG/bwd_$T.csv
++echo "=== $(date '+%F %T') $(hostname) DS train $T (GPUs $CUDA_VISIBLE_DEVICES)"
++setsid $ENV/bin/python eval-tp/launch_deltaserve.py --config $CFG --port $PORT --start-finetuning \
++    --startup-timeout 2400 > $LOG/ds_$T.log 2>&1 &
++L=$!
++until curl -s -o /dev/null 127.0.0.1:$PORT/health; do sleep 10; kill -0 $L 2>/dev/null || { echo "launcher died"; exit 1; }; done
++sleep 20   # let /start_finetuning land, then kick the idle engine loop once
++curl -s 127.0.0.1:$PORT/v1/completions -H 'Content-Type: application/json' \
++     -d '{"model":"llama3","prompt":"Hello","max_tokens":2}' > /dev/null
++echo "=== $(date '+%T') serving + training"
++for i in $(seq 720); do
++  [ -f $OUT/final/adapter_model.safetensors ] && break
++  kill -0 $L 2>/dev/null || { echo "launcher died"; break; }
++  sleep 10
++done
++ls $OUT/final 2>/dev/null && echo "=== $(date '+%T') final adapter exported"
++# The server runs in its own session (not the launcher's process group): find it by its
++# per-task bwd log path, SIGINT its group, then SIGKILL whatever is left. Return only when
++# port $PORT is free so the next task cannot hit the old server's /health.
++SPID=$(pgrep -f "dserve-vllm serve.*bwd_$T.csv" | head -1)
++kill -INT -$L ${SPID:+-$SPID} 2>/dev/null; sleep 30
++kill -KILL -$L ${SPID:+-$SPID} 2>/dev/null
++for i in $(seq 30); do curl -s -o /dev/null 127.0.0.1:$PORT/health || break; sleep 5; done
++echo "=== $(date '+%F %T') done $T"
+diff --git a/eval-rsi/run_rsi_e2e.sh b/eval-rsi/run_rsi_e2e.sh
+new file mode 100755
+index 0000000..d9042aa
+--- /dev/null
++++ b/eval-rsi/run_rsi_e2e.sh
+@@ -0,0 +1,54 @@
++#!/bin/bash
++# End-to-end RSI on ONE DeltaServe server (ACE Formula, Qwen3-32B YaRN, TP=4 on GPUs 0-3):
++#   A  inference only : test-split traffic (empty playbook), Poisson RPS_A      -> latency baseline + base acc
++#   B  user traffic   : train-split requests WITH the learned playbook          -> traces (prompt, answer, correct)
++#   I  traces -> SFT  : correct only, playbook -> "(empty)", bullet_ids -> []   -> POST /ft/ingest, /start_finetuning
++#   C  co-serving     : the same test-split traffic as A while the LoRA trains in the gaps, until final/ is exported
++#   D  eval           : the exported adapter with RSI-system's protocol (stock vLLM 0.31, GPU 4)
++# Usage (inside the allocation):  eval-rsi/run_rsi_e2e.sh
++set -u
++ROOT=/mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM; cd $ROOT
++ENV=/mnt/weka/home/jianshu.she/miniconda3/envs/dserve-vllm
++ACE=/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE
++PLAYBOOK=$(ls $ACE/results/finance/formula_offline_gt/*/best_playbook.txt | head -1)
++export FLASHINFER_WORKSPACE_BASE=$HOME/.cache/flashinfer-dserve CUDA_HOME=/usr/local/cuda-13.2 \
++       PATH=/usr/local/cuda-13.2/bin:$ENV/bin:$PATH HF_HUB_OFFLINE=1 no_proxy=localhost,127.0.0.1 NO_PROXY=localhost,127.0.0.1
++E=$ROOT/eval-rsi/e2e; mkdir -p $E; rm -rf $E/adapters; PORT=8000; URL=http://127.0.0.1:$PORT
++RPS_A=${RPS_A:-0.5}
++CFG=$ROOT/configs/.gen_rsi_e2e.yaml
++sed -e "s#^  adapter_save_every: 10#  adapter_save_every: 10\n  bwd_log_path: $E/bwd.csv#" \
++    configs/serving_config_finetuning_qwen3_32b_tp4_rsi_e2e.yaml > $CFG
++rm -f $E/bwd.csv $E/A.jsonl $E/B.jsonl $E/C.jsonl
++T() { echo "=== $(date '+%F %T') $*"; }
++traffic() { (cd $ACE/ace && .venv/bin/python $ROOT/eval-rsi/rsi_traffic.py --url $URL/v1 --model llama3 "$@"); }
++
++T "start DeltaServe (GPUs $CUDA_VISIBLE_DEVICES)"
++setsid $ENV/bin/python eval-tp/launch_deltaserve.py --config $CFG --port $PORT --startup-timeout 3000 > $E/server.log 2>&1 &
++L=$!
++until curl -s -o /dev/null $URL/health; do sleep 10; kill -0 $L 2>/dev/null || { T "launcher died"; exit 1; }; done
++T "server up"
++
++T "A: inference only, test split, ${RPS_A} rps"
++traffic --task formula --split test --rps $RPS_A --out $E/A.jsonl | tail -1
++
++T "B: user traffic with the learned playbook ($PLAYBOOK), train split"
++traffic --task formula --split train --context $PLAYBOOK --concurrency 16 --out $E/B.jsonl | tail -1
++
++T "I: traces -> SFT rows -> /ft/ingest, then /start_finetuning"
++python3 eval-rsi/traces_to_sft.py $E/B.jsonl $E/sft_from_traces.jsonl --ingest $URL
++curl -s -X POST $URL/start_finetuning; echo
++
++T "C: co-serving — same test traffic while training, until final/ is exported"
++traffic --task formula --split test --rps $RPS_A --loops 20 --stop-file $E/adapters/final/adapter_model.safetensors \
++    --out $E/C.jsonl | tail -1
++for i in $(seq 360); do [ -f $E/adapters/final/adapter_model.safetensors ] && break; sleep 10; done
++ls $E/adapters/final && T "final adapter exported"
++
++SPID=$(pgrep -f "dserve-vllm serve.*$E/bwd.csv" | head -1)
++kill -INT -$L ${SPID:+-$SPID} 2>/dev/null; sleep 30; kill -KILL -$L ${SPID:+-$SPID} 2>/dev/null
++T "server stopped"
++
++T "D: eval the RSI adapter (RSI-system protocol, GPU 4)"
++cp -r $E/adapters/final $E/adapter_rsi_final
++eval-rsi/eval_ace.sh 4 9334 formula e2e_rsi_formula $E/adapter_rsi_final
++T "done"
+diff --git a/eval-rsi/traces_to_sft.py b/eval-rsi/traces_to_sft.py
+new file mode 100644
+index 0000000..57b81b1
+--- /dev/null
++++ b/eval-rsi/traces_to_sft.py
+@@ -0,0 +1,54 @@
++"""Served ACE traces -> RSI-system SFT rows (their data_v2 recipe), and optionally ingest them.
++
++Keeps the correct traces only (ACE's own answer_is_correct, recorded by rsi_traffic.py), re-renders the
++prompt with an EMPTY playbook and reflection (context distillation: the playbook the traffic was served with
++goes into the weights), and empties "bullet_ids" in the answer — exactly build_sft_data.py + make_data_v2.py.
++
++  python3 eval-rsi/traces_to_sft.py traces.jsonl sft.jsonl [--ingest http://127.0.0.1:8000]
++"""
++import argparse
++import json
++import re
++import sys
++import urllib.request
++
++PAT = re.compile(r'"bullet_ids"\s*:\s*\[[^\]]*\]')
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("traces")
++    ap.add_argument("out")
++    ap.add_argument("--ace-dir", default="/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/ace")
++    ap.add_argument("--ingest", default="", help="server base URL: POST the rows to /ft/ingest")
++    a = ap.parse_args()
++    sys.path.insert(0, a.ace_dir)
++    from ace.prompts.generator import GENERATOR_PROMPT
++
++    seen, rows = set(), []
++    n = 0
++    for line in open(a.traces):
++        t = json.loads(line)
++        n += 1
++        if not t["correct"] or t["index"] in seen:
++            continue
++        seen.add(t["index"])
++        prompt = GENERATOR_PROMPT.format("(empty)", "(empty)", t["question"], t["context"])
++        target = PAT.sub('"bullet_ids": []', t["response"], count=1)
++        rows.append({"messages": [{"role": "user", "content": prompt},
++                                  {"role": "assistant", "content": target}],
++                     "meta": {"task": t["task"], "split": t["split"], "index": t["index"],
++                              "source": "deltaserve-served-trace"}})
++    with open(a.out, "w") as f:
++        for r in rows:
++            f.write(json.dumps(r) + "\n")
++    print(f"{n} traces -> {len(rows)} SFT rows (correct, unique items) -> {a.out}")
++    if a.ingest:
++        req = urllib.request.Request(a.ingest.rstrip("/") + "/ft/ingest",
++                                     data=json.dumps({"rows": rows}).encode(),
++                                     headers={"Content-Type": "application/json"})
++        print("ingest:", urllib.request.urlopen(req, timeout=600).read().decode())
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/eval-rsi/train_lora_ace_targets.py b/eval-rsi/train_lora_ace_targets.py
+new file mode 100644
+index 0000000..70303e4
+--- /dev/null
++++ b/eval-rsi/train_lora_ace_targets.py
+@@ -0,0 +1,159 @@
++# Copy of RSI-system benchmark/ACE/sft/train_lora.py with one change: --targets (default = the original 7 modules).
++# Used as the attention-only control for the DeltaServe co-served LoRA (which trains q,k,v,o only).
++"""LoRA SFT of Qwen3-32B on ACE context-distillation data (sft/data_v1/*.jsonl), single GPU.
++
++Format = exactly what the model sees at inference (thinking OFF):
++  prompt  = chat_template(messages[:i], add_generation_prompt=True, enable_thinking=False)   (ends with
++            "<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n")
++  target  = assistant content + "<|im_end|>"
++Single-turn finance examples match inference exactly. Multi-turn AppWorld trajectories are rendered once with every
++assistant turn preceded by the empty think block (the conditioning the model had when it generated that turn) and the
++loss on every assistant turn; earlier turns at inference appear without the block (small, documented mismatch).
++Loss is computed only on target positions (lm_head applied to those hidden states only -> no 28k x 152k logits).
++
++Usage (conda env verl):
++  python train_lora.py --data sft/data_v1/formula.jsonl --out sft/runs/<id>/formula --epochs 2 --lr 1e-4
++"""
++import argparse
++import json
++import math
++import os
++import random
++import time
++
++import torch
++from peft import LoraConfig, get_peft_model
++from transformers import AutoModelForCausalLM, AutoTokenizer, get_cosine_schedule_with_warmup
++
++MODEL = "/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/models/Qwen3-32B-yarn131k"  # same config as inference (YaRN x4)
++THINK = "<think>\n\n</think>\n\n"
++
++ap = argparse.ArgumentParser()
++ap.add_argument("--data", required=True)
++ap.add_argument("--out", required=True)
++ap.add_argument("--epochs", type=float, default=2)
++ap.add_argument("--lr", type=float, default=1e-4)
++ap.add_argument("--rank", type=int, default=16)
++ap.add_argument("--alpha", type=int, default=32)
++ap.add_argument("--dropout", type=float, default=0.05)
++ap.add_argument("--tokens_per_step", type=int, default=32768, help="target tokens (incl. prompt) per optimizer step")
++ap.add_argument("--max_len", type=int, default=32768)
++ap.add_argument("--heldout_frac", type=float, default=0.05)
++ap.add_argument("--seed", type=int, default=42)
++ap.add_argument("--targets", default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
++                help="[DeltaServe control] LoRA target modules (attention-only = q_proj,k_proj,v_proj,o_proj)")
++args = ap.parse_args()
++os.makedirs(args.out, exist_ok=True)
++random.seed(args.seed)
++torch.manual_seed(args.seed)
++tok = AutoTokenizer.from_pretrained(MODEL)
++END = tok.convert_tokens_to_ids("<|im_end|>")
++
++
++def encode(messages):
++    """-> (input_ids, labels); labels=-100 except assistant contents (+ their <|im_end|>).
++    First prompt = official template up to the first assistant turn (identical to inference); every later turn is
++    appended as '<|im_start|>{role}\\n{content}<|im_end|>\\n' followed by the assistant header + empty think block."""
++    # AppWorld prompts contain fixed few-shot demo dialogues (assistant turns that are NOT the model's own work): the
++    # real task starts at the last user message saying "solve the actual task"; everything up to it is prompt only.
++    start = max([i for i, m in enumerate(messages) if m["role"] == "user" and "solve the actual task" in m["content"]] or [0])
++    first = next(i for i, m in enumerate(messages) if m["role"] == "assistant" and i > start)
++    ids = tok.encode(tok.apply_chat_template(messages[:first], tokenize=False, add_generation_prompt=True,
++                                             enable_thinking=False), add_special_tokens=False)
++    labels = [-100] * len(ids)
 +    nl = tok.encode("\n", add_special_tokens=False)
-+    spans: list[tuple[int, int]] = []
 +    for i in range(first, len(messages)):
 +        m = messages[i]
 +        if m["role"] == "assistant":
 +            if i != first:
-+                ids += tok.encode("<|im_start|>assistant\n" + THINK_OFF,
-+                                  add_special_tokens=False)
-+            t = tok.encode(m["content"], add_special_tokens=False) + [end]
-+            spans.append((len(ids), len(ids) + len(t)))
-+            ids += t + nl
++                p = tok.encode("<|im_start|>assistant\n" + THINK, add_special_tokens=False)
++                ids, labels = ids + p, labels + [-100] * len(p)
++            t = tok.encode(m["content"], add_special_tokens=False) + [END]
++            ids, labels = ids + t + nl, labels + t + [-100] * len(nl)
 +        else:
-+            ids += tok.encode(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n",
-+                              add_special_tokens=False)
-+    return ids, spans
++            p = tok.encode(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n", add_special_tokens=False)
++            ids, labels = ids + p, labels + [-100] * len(p)
++    return ids, labels
 +
 +
-+def _ids(x) -> list[int]:
-+    """``apply_chat_template(tokenize=True)`` returns a list on transformers 4.x
-+    and a BatchEncoding-like mapping on 5.x."""
-+    if isinstance(x, dict) or hasattr(x, "keys"):
-+        x = x["input_ids"]
-+    return list(x)
++rows = [json.loads(l) for l in open(args.data)]
++data = []
++for r in rows:
++    ids, lab = encode(r["messages"])
++    if len(ids) > args.max_len:
++        ids, lab = ids[: args.max_len], lab[: args.max_len]
++    if any(x != -100 for x in lab):
++        data.append((ids, lab))
++random.shuffle(data)
++n_dev = max(1, int(len(data) * args.heldout_frac))
++dev, train = data[:n_dev], data[n_dev:]
++n_tok = sum(len(x[0]) for x in train)
++steps_per_epoch = max(1, math.ceil(n_tok / args.tokens_per_step))
++total_steps = max(1, int(steps_per_epoch * args.epochs))
++print(json.dumps({"train_ex": len(train), "dev_ex": len(dev), "train_tokens": n_tok, "target_tokens": sum(sum(1 for y in x[1] if y != -100) for x in train),
++                  "steps_per_epoch": steps_per_epoch, "total_steps": total_steps, **vars(args)}), flush=True)
++
++model = AutoModelForCausalLM.from_pretrained(MODEL, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map={"": 0})
++model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
++model.enable_input_require_grads()
++model.config.use_cache = False
++model = get_peft_model(model, LoraConfig(r=args.rank, lora_alpha=args.alpha, lora_dropout=args.dropout, task_type="CAUSAL_LM",
++                                         target_modules=args.targets.split(",")))
++model.print_trainable_parameters()
++opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.0, betas=(0.9, 0.999))
++sched = get_cosine_schedule_with_warmup(opt, max(1, int(0.05 * total_steps)), total_steps)
++base = model.base_model.model
++
++
++def loss_of(ids, lab):
++    x = torch.tensor([ids], device="cuda")
++    y = torch.tensor([lab], device="cuda")
++    h = base.model(input_ids=x).last_hidden_state[0, :-1]
++    tgt = y[0, 1:]
++    m = tgt != -100
++    logits = base.lm_head(h[m]).float()
++    return torch.nn.functional.cross_entropy(logits, tgt[m], reduction="sum"), int(m.sum())
++
++
++@torch.no_grad()
++def eval_dev():
++    model.eval()
++    tot, n = 0.0, 0
++    for ids, lab in dev:
++        l, k = loss_of(ids, lab)
++        tot, n = tot + l.item(), n + k
++    model.train()
++    return tot / max(n, 1)
++
++
++log = open(f"{args.out}/train_log.jsonl", "w")
++print(json.dumps({"step": 0, "dev_loss": eval_dev()}), file=log, flush=True)
++model.train()
++step, t0, order = 0, time.time(), []
++while step < total_steps:
++    if not order:
++        order = list(range(len(train)))
++        random.shuffle(order)
++    batch, btok = [], 0
++    while order and btok < args.tokens_per_step:
++        i = order.pop()
++        batch.append(train[i])
++        btok += len(train[i][0])
++    n_tgt = sum(sum(1 for y in lab if y != -100) for _, lab in batch)
++    tot = 0.0
++    for ids, lab in batch:  # token-weighted mean over the batch
++        l, _ = loss_of(ids, lab)
++        (l / n_tgt).backward()
++        tot += l.item()
++    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
++    opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
++    step += 1
++    rec = {"step": step, "train_loss": tot / n_tgt, "lr": sched.get_last_lr()[0], "seqs": len(batch), "tokens": btok,
++           "elapsed_s": round(time.time() - t0), "max_mem_gb": round(torch.cuda.max_memory_allocated() / 2**30, 1)}
++    if step % max(1, steps_per_epoch // 2) == 0 or step == total_steps:
++        rec["dev_loss"] = eval_dev()
++    print(json.dumps(rec), file=log, flush=True)
++    print(json.dumps(rec), flush=True)
++model.save_pretrained(args.out)
++tok.save_pretrained(args.out)
++print("SAVED", args.out, flush=True)
+diff --git a/scripts/init_qwen3_32b_baseline_adapter.py b/scripts/init_qwen3_32b_baseline_adapter.py
+new file mode 100644
+index 0000000..c1fcef3
+--- /dev/null
++++ b/scripts/init_qwen3_32b_baseline_adapter.py
+@@ -0,0 +1,46 @@
++"""Initialize PEFT QKV LoRA rank 8 / alpha 32 without loading base weights.
++
++Run with dserve-vllm/.venv/bin/python. This is the ordinary zero-B LoRA
++initialization used for the four-H200 baseline comparison, not a trained adapter.
++"""
++
++import json
++import math
++from pathlib import Path
++
++import torch
++from safetensors.torch import save_file
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    model = Path("/mnt/weka/home/jianshu.she/scratch/Qwen3-32B")
++    cfg = json.loads((model / "config.json").read_text())
++    out = root / "adapters/qwen3-32b-qkv-r8-initial"
++    out.mkdir(parents=True, exist_ok=True)
++    config = {
++        "base_model_name_or_path": str(model), "bias": "none",
++        "fan_in_fan_out": False, "inference_mode": True,
++        "init_lora_weights": True, "lora_alpha": 32, "lora_dropout": 0.0,
++        "modules_to_save": None, "peft_type": "LORA", "r": 8,
++        "target_modules": ["q_proj", "k_proj", "v_proj"],
++        "task_type": "CAUSAL_LM", "use_rslora": False,
++    }
++    (out / "adapter_config.json").write_text(json.dumps(config, indent=2) + "\n")
++    torch.manual_seed(0)
++    weights = {}
++    for i in range(cfg["num_hidden_layers"]):
++        for proj, heads in (("q", cfg["num_attention_heads"]),
++                            ("k", cfg["num_key_value_heads"]),
++                            ("v", cfg["num_key_value_heads"])):
++            prefix = f"base_model.model.model.layers.{i}.self_attn.{proj}_proj.lora_"
++            a = torch.empty(8, cfg["hidden_size"], dtype=torch.float32)
++            torch.nn.init.kaiming_uniform_(a, a=math.sqrt(5))
++            weights[prefix + "A.weight"] = a
++            weights[prefix + "B.weight"] = torch.zeros(heads * cfg["head_dim"], 8)
++    save_file(weights, str(out / "adapter_model.safetensors"))
++    print(f"Saved {len(weights)} tensors to {out}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/init_qwen3_lora_adapter.py b/scripts/init_qwen3_lora_adapter.py
+new file mode 100644
+index 0000000..da8c697
+--- /dev/null
++++ b/scripts/init_qwen3_lora_adapter.py
+@@ -0,0 +1,55 @@
++"""Write a zero-B PEFT LoRA adapter for a Qwen3 checkpoint without loading weights
++(standard PEFT init: A kaiming-uniform, B = 0, so the adapter starts as a no-op).
++
++    python scripts/init_qwen3_lora_adapter.py --model /path/Qwen3-32B --out adapters/qwen3-32b-qkvo-r16-initial \
++        --rank 16 --alpha 32 --targets q,k,v,o
++"""
++import argparse
++import json
++import math
++from pathlib import Path
++
++import torch
++from safetensors.torch import save_file
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--model", required=True)
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--rank", type=int, default=16)
++    ap.add_argument("--alpha", type=int, default=32)
++    ap.add_argument("--targets", default="q,k,v,o", help="subset of q,k,v,o (the backward trains attention only)")
++    ap.add_argument("--seed", type=int, default=0)
++    a = ap.parse_args()
++    cfg = json.loads((Path(a.model) / "config.json").read_text())
++    hd = cfg.get("head_dim") or cfg["hidden_size"] // cfg["num_attention_heads"]
++    dims = {"q": (cfg["hidden_size"], cfg["num_attention_heads"] * hd),
++            "k": (cfg["hidden_size"], cfg["num_key_value_heads"] * hd),
++            "v": (cfg["hidden_size"], cfg["num_key_value_heads"] * hd),
++            "o": (cfg["num_attention_heads"] * hd, cfg["hidden_size"])}
++    targets = [t.strip() for t in a.targets.split(",")]
++    out = Path(a.out)
++    out.mkdir(parents=True, exist_ok=True)
++    (out / "adapter_config.json").write_text(json.dumps({
++        "base_model_name_or_path": a.model, "bias": "none", "fan_in_fan_out": False,
++        "inference_mode": True, "init_lora_weights": True, "lora_alpha": a.alpha,
++        "lora_dropout": 0.0, "modules_to_save": None, "peft_type": "LORA", "r": a.rank,
++        "target_modules": [f"{t}_proj" for t in targets], "task_type": "CAUSAL_LM",
++        "use_rslora": False}, indent=2) + "\n")
++    torch.manual_seed(a.seed)
++    w = {}
++    for i in range(cfg["num_hidden_layers"]):
++        for t in targets:
++            fin, fout = dims[t]
++            pre = f"base_model.model.model.layers.{i}.self_attn.{t}_proj.lora_"
++            A = torch.empty(a.rank, fin)
++            torch.nn.init.kaiming_uniform_(A, a=math.sqrt(5))
++            w[pre + "A.weight"] = A
++            w[pre + "B.weight"] = torch.zeros(fout, a.rank)
++    save_file(w, str(out / "adapter_model.safetensors"))
++    print(f"saved {len(w)} tensors to {out}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/make_long_ft_corpus.py b/scripts/make_long_ft_corpus.py
+new file mode 100644
+index 0000000..56e3852
+--- /dev/null
++++ b/scripts/make_long_ft_corpus.py
+@@ -0,0 +1,66 @@
++"""Build a mixed short/long FT corpus for the long-context bring-up.
++
++One sample per line (the FinetuningStore format), newlines escaped. Long
++samples are OpenR1-Math problem + reasoning trace pairs (real 1K-16K-token
++trajectories); short ones come from an alpaca corpus. Lengths are measured
++with the served model's tokenizer so the buckets are exact.
++
++    python scripts/make_long_ft_corpus.py --model /path/Qwen3-32B \
++        --short alpaca_1000.txt --out long_ft_corpus.txt
++"""
++import argparse
++import glob
++import os
++import random
++
++import pyarrow.parquet as pq
++from transformers import AutoTokenizer
++
++BUCKETS = [(1024, 2048), (2048, 4096), (4096, 8192), (8192, 12288), (12288, 16000)]
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--model", required=True)
++    ap.add_argument("--short", required=True)
++    ap.add_argument("--out", required=True)
++    ap.add_argument("--n-short", type=int, default=200)
++    ap.add_argument("--per-bucket", type=int, default=6)
++    ap.add_argument("--seed", type=int, default=0)
++    args = ap.parse_args()
++    rng = random.Random(args.seed)
++    tok = AutoTokenizer.from_pretrained(args.model)
++
++    files = sorted(glob.glob(os.path.expanduser(
++        "~/.cache/huggingface/hub/datasets--open-r1--OpenR1-Math-220k/"
++        "snapshots/*/all/*.parquet")))
++    want = {b: [] for b in BUCKETS}
++    for f in files:
++        t = pq.read_table(f, columns=["problem", "generations"]).to_pylist()
++        rng.shuffle(t)
++        for row in t:
++            for gen in row["generations"] or []:
++                text = f"Problem: {row['problem']}\nSolution: {gen}"
++                text = " ".join(text.split())          # one line, no newlines
++                n = len(tok(text)["input_ids"])
++                for b in BUCKETS:
++                    if b[0] <= n < b[1] and len(want[b]) < args.per_bucket:
++                        want[b].append((n, text))
++            if all(len(v) >= args.per_bucket for v in want.values()):
++                break
++        if all(len(v) >= args.per_bucket for v in want.values()):
++            break
++
++    with open(args.short) as fh:
++        short = [ln.strip() for ln in fh if ln.strip()][: args.n_short]
++    lines = short + [t for v in want.values() for _, t in v]
++    rng.shuffle(lines)
++    with open(args.out, "w") as fh:
++        fh.write("\n".join(lines) + "\n")
++    print(f"wrote {len(lines)} samples to {args.out}: {len(short)} short")
++    for b, v in want.items():
++        print(f"  {b}: {len(v)} samples, lengths {sorted(n for n, _ in v)}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_adapter_export.py b/tests/test_adapter_export.py
+new file mode 100644
+index 0000000..661c7e9
+--- /dev/null
++++ b/tests/test_adapter_export.py
+@@ -0,0 +1,113 @@
++"""FT adapter export (PEFT dir) gates — run with `python`, not pytest. CPU/gloo.
++
++1. TP=1: ``export_adapter`` writes the fp32 masters under their original PEFT
++   names and full shapes, plus an adapter_config.json, and refreshes latest/.
++2. TP=2: after identical training, the shards gathered + merged by rank 0
++   equal the TP=1 export (q/k/v B row shards, o A column shards).
++3. ``adapter_save_every`` exports from inside process_backward.
++
++    python tests/test_adapter_export.py
++"""
++
++import json
++import os
++import sys
++import tempfile
++from pathlib import Path
++
++import torch
++import torch.distributed as dist
++import torch.multiprocessing as mp
++from safetensors.torch import load_file
++
++TESTS = str(Path(__file__).resolve().parent)
++sys.path.insert(0, TESTS)
++import test_tp_trainer_graph_nccl as T  # noqa: E402
++
++T.GEOM["qwen3"].update(hidden=48, Hq=8, Hkv=4, inter=128)
++PORT = 29741
++PASS = FAIL = 0
++
++
++def cond(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
++
++
++def train(svc, full, steps=3):
++    starts = [0, T.SEQ_LENS[0]]
++    for _ in range(steps):
++        acts = T.remat_activations(svc, full["embed"], full["ids"], T.SEQ_LENS, starts)
++        svc.process_backward(acts, T.SEQ_LENS, sum(T.SEQ_LENS), epoch=0)
++
++
++def worker(rank, path, out):
++    full = torch.load(path)
++    meta = T.make_meta("qwen3", tp_size=2, tp_rank=rank, port=PORT, graph=False)
++    svc = T.make_service("qwen3", T.shard_base(full["base"], rank, 2, "qwen3"),
++                         full["ft"], meta, torch.device("cpu"))
++    svc._src_adapter = None
++    train(svc, full)
++    svc.export_adapter(os.path.join(out, "tp2"))
++    dist.destroy_process_group()
++
++
++def main():
++    full = T.build_full("qwen3", seed=11)
++    with tempfile.TemporaryDirectory(prefix="adapter_export_") as tmp:
++        # source adapter_config.json the export should copy
++        src = os.path.join(tmp, "src")
++        os.makedirs(src)
++        json.dump({"peft_type": "LORA", "r": 4, "lora_alpha": 8,
++                   "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"]},
++                  open(os.path.join(src, "adapter_config.json"), "w"))
++
++        print("TP=1 export")
++        meta = T.make_meta("qwen3", tp_size=1, tp_rank=0, port=0, graph=False)
++        meta.update(adapter_save_dir=os.path.join(tmp, "periodic"), adapter_save_every=2,
++                    finetuning_lora_path=src)
++        ref = T.make_service("qwen3", full["base"], full["ft"], meta, torch.device("cpu"))
++        train(ref, full)
++        ref.export_adapter(os.path.join(tmp, "tp1"))
++        sd = load_file(os.path.join(tmp, "tp1", "adapter_model.safetensors"))
++        cond("same tensor names as the source adapter", set(sd) == set(full["ft"]))
++        cond("full (unsharded) shapes", all(sd[k].shape == full["ft"][k].shape for k in sd))
++        masters = {ref._lora_keys[k]: ref.lora[k[0]][k[1]][k[2]].detach() for k in ref._lora_keys}
++        cond("values == fp32 masters", all(torch.equal(sd[k], masters[k]) for k in sd))
++        cond("training moved the weights",
++             any(not torch.equal(sd[k], full["ft"][k].float()) for k in sd))
++        cfg = json.load(open(os.path.join(tmp, "tp1", "adapter_config.json")))
++        cond("adapter_config copied (r, alpha, targets) + inference_mode",
++             cfg["r"] == 4 and cfg["lora_alpha"] == 8 and cfg["inference_mode"] is True)
++        cond("latest/ refreshed", os.path.exists(os.path.join(tmp, "latest", "adapter_model.safetensors")))
++        cond("adapter_save_every=2 exported cycle2/ during training",
++             os.path.exists(os.path.join(tmp, "periodic", "cycle2", "adapter_model.safetensors")))
++
++        print("TP=2 export (gloo) == TP=1")
++        path = os.path.join(tmp, "full.pt")
++        torch.save(full, path)
++        ctx = mp.get_context("spawn")
++        procs = [ctx.Process(target=worker, args=(r, path, tmp)) for r in range(2)]
++        for p in procs:
++            p.start()
++        for p in procs:
++            p.join(900)
++        cond("both ranks exited cleanly", all(p.exitcode == 0 for p in procs),
++             str([p.exitcode for p in procs]))
++        f2 = os.path.join(tmp, "tp2", "adapter_model.safetensors")
++        if os.path.exists(f2):
++            sd2 = load_file(f2)
++            err = max((sd2[k] - sd[k]).abs().max().item() / (sd[k].abs().max().item() + 1e-12)
++                      for k in sd)
++            cond("merged TP=2 adapter == TP=1 adapter", set(sd2) == set(sd) and err < 1e-4,
++                 f"max rel err {err:.1e}")
++        else:
++            cond("rank 0 wrote the TP=2 adapter", False)
++    print(f"\n{PASS} passed, {FAIL} failed")
++    sys.exit(1 if FAIL else 0)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_backward_pause_resume.py b/tests/test_backward_pause_resume.py
+new file mode 100644
+index 0000000..74e8e65
+--- /dev/null
++++ b/tests/test_backward_pause_resume.py
+@@ -0,0 +1,110 @@
++"""Backward resumes during idle without cancelling a newer throttle pause."""
++
++from contextlib import nullcontext
++import unittest
++from types import SimpleNamespace
++from unittest.mock import Mock, patch
++
++from vllm.config.finetune import FinetuneConfig
++from vllm.v1.worker.gpu_model_runner import GPUModelRunner
++
++
++class PauseResumeTest(unittest.TestCase):
++    def make_idle_runner(self, event, relay_mode):
++        coord = Mock(relay_mode=relay_mode)
++        runner = SimpleNamespace(
++            execute_model_state=None,
++            routed_experts_initialized=False,
++            speculative_config=None,
++            parallel_config=SimpleNamespace(distributed_executor_backend="mp"),
++            vllm_config=SimpleNamespace(
++                finetune_config=FinetuneConfig(
++                    fwd_token_throttle_enable=True, fwd_token_throttle=0
++                )
++            ),
++            synchronize_input_prep=nullcontext,
++            _update_states=Mock(),
++            _ft_fill_relay_fields=Mock(),
++            _ft_coordinator=coord,
++            _ft_resume_evt=event,
++            _throttle_held=False,
++        )
++        runner._ft_maybe_resume_backward = lambda c: (
++            GPUModelRunner._ft_maybe_resume_backward(runner, c)
++        )
++        return runner, coord
++
++    def execute_idle(self, runner):
++        output = SimpleNamespace(total_num_scheduled_tokens=0)
++        module = "vllm.v1.worker.gpu_model_runner"
++        with (
++            patch(module + ".has_kv_transfer_group", return_value=False),
++            patch(module + ".has_ec_transfer", return_value=False),
++        ):
++            return GPUModelRunner.execute_model(runner, output)
++
++    def test_idle_step_resumes_completed_ft_forward_without_throttle(self):
++        for relay in (False, True):
++            with self.subTest(relay_mode=relay):
++                event = Mock(query=Mock(return_value=True))
++                runner, coord = self.make_idle_runner(event, relay)
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_called_once_with()
++                self.assertIsNone(runner._ft_resume_evt)
++                # A later idle poll must not release the grant a second time.
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_called_once_with()
++
++    def test_idle_step_retries_event_after_sample_tokens_misses_completion(self):
++        for relay in (False, True):
++            with self.subTest(relay_mode=relay):
++                event = Mock(query=Mock(side_effect=[False, False, True]))
++                runner, coord = self.make_idle_runner(event, relay)
++                # The same event poll used by sample_tokens runs before the
++                # GPU completes. Idle execute_model calls must keep polling.
++                runner._ft_maybe_resume_backward(coord)
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_not_called()
++                self.assertIs(runner._ft_resume_evt, event)
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_called_once_with()
++                self.assertIsNone(runner._ft_resume_evt)
++
++    def test_idle_step_releases_sticky_throttle(self):
++        runner, coord = self.make_idle_runner(None, True)
++        runner._throttle_held = True
++        coord.fwd_throttle_active = True
++        self.execute_idle(runner)
++        coord.gpu_resume_backward.assert_called_once_with()
++        self.assertFalse(runner._throttle_held)
++        self.assertFalse(coord.fwd_throttle_active)
++
++    def test_completed_prefill_keeps_new_throttle_pause(self):
++        runner = SimpleNamespace(
++            _ft_resume_evt=Mock(query=lambda: True), _throttle_held=True
++        )
++        coord = Mock()
++        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
++        coord.gpu_resume_backward.assert_not_called()
++        self.assertIsNone(runner._ft_resume_evt)
++
++    def test_completed_prefill_without_throttle_resumes(self):
++        runner = SimpleNamespace(
++            _ft_resume_evt=Mock(query=lambda: True), _throttle_held=False
++        )
++        coord = Mock()
++        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
++        coord.gpu_resume_backward.assert_called_once_with()
++        self.assertIsNone(runner._ft_resume_evt)
++
++    def test_unfinished_prefill_does_not_resume(self):
++        event = Mock(query=lambda: False)
++        runner = SimpleNamespace(_ft_resume_evt=event, _throttle_held=False)
++        coord = Mock()
++        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
++        coord.gpu_resume_backward.assert_not_called()
++        self.assertIs(runner._ft_resume_evt, event)
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/tests/test_chat_sft.py b/tests/test_chat_sft.py
 new file mode 100644
 index 0000000..d052889
@@ -2058,246 +3836,6 @@ index 0000000..d052889
 +    store_load(tok)
 +    print(f"\n{PASS} passed, {FAIL} failed")
 +    sys.exit(1 if FAIL else 0)
-diff --git a/tests/test_rope_yarn.py b/tests/test_rope_yarn.py
-new file mode 100644
-index 0000000..1dc7994
---- /dev/null
-+++ b/tests/test_rope_yarn.py
-@@ -0,0 +1,115 @@
-+"""Backward RoPE with YaRN == vLLM's YaRNScalingRotaryEmbedding (run with `python`).
-+
-+RSI-system serves Qwen3-32B with YaRN x4 (131072 ctx). YaRN changes the rotary
-+frequencies at EVERY position and scales cos/sin by mscale, so the backward's
-+RoPE remat must reproduce it exactly or the LoRA gradients are wrong.
-+
-+    python tests/test_rope_yarn.py [--yarn-config DIR]
-+"""
-+
-+from __future__ import annotations
-+
-+import argparse
-+import sys
-+
-+import torch
-+from transformers import AutoConfig
-+
-+from vllm.deltaserve.bwd_services.common.ops import apply_rope, rope_backward, rope_cos_sin
-+from vllm.deltaserve.ft_meta import rope_scaling_of
-+from vllm.model_executor.layers.rotary_embedding.yarn_scaling_rope import (
-+    YaRNScalingRotaryEmbedding,
-+)
-+
-+PASS = FAIL = 0
-+
-+
-+def cond(name, ok, detail=""):
-+    global PASS, FAIL
-+    PASS += bool(ok)
-+    FAIL += not ok
-+    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
-+
-+
-+def _vllm_yarn_cache(hd, orig, theta, factor):
-+    """vLLM's own YaRN cos/sin cache, via its methods on a bare instance (the
-+    CustomOp constructor needs a device-bearing vLLM config; the math does not)."""
-+    from vllm.model_executor.layers.rotary_embedding.common import yarn_get_mscale
-+    ref = object.__new__(YaRNScalingRotaryEmbedding)
-+    ref.head_size = ref.rotary_dim = hd
-+    ref.max_position_embeddings = orig
-+    ref.base = theta
-+    ref.scaling_factor = factor
-+    ref.extrapolation_factor = ref.attn_factor = 1
-+    ref.beta_fast, ref.beta_slow, ref.truncate = 32, 1, True
-+    ref.mscale = float(yarn_get_mscale(factor))
-+    return ref._compute_cos_sin_cache()
-+
-+
-+def against_vllm(theta=1e6, hd=128, factor=4.0, orig=32768):
-+    print(f"cos/sin + rotation vs vLLM YaRN (theta={theta:g}, head_dim={hd}, x{factor:g})")
-+    cache_all = _vllm_yarn_cache(hd, orig, theta, factor)
-+    sc = {"rope_type": "yarn", "factor": factor, "original_max_position_embeddings": orig}
-+    pos = torch.tensor([0, 1, 7, 513, 4095, 32767, 40000, 131071])
-+    cache = cache_all[pos].float()
-+    cos_r, sin_r = cache[:, : hd // 2], cache[:, hd // 2:]
-+    cos, sin = rope_cos_sin(pos, hd, theta, sc)
-+    err = max((cos - cos_r).abs().max().item(), (sin - sin_r).abs().max().item())
-+    cond("cos/sin == vLLM YaRN cache (incl. mscale)", err < 1e-5, f"max abs err {err:.1e}")
-+    plain_c, _ = rope_cos_sin(pos, hd, theta)
-+    cond("YaRN differs from plain RoPE (so the fix matters)",
-+         (plain_c - cos).abs().max().item() > 1e-2)
-+
-+    torch.manual_seed(0)
-+    n, H = len(pos), 4
-+    q = torch.randn(n, H, hd)
-+    # NeoX rotation with vLLM's cache, written out independently
-+    c, s_ = cos_r[:, None, :], sin_r[:, None, :]
-+    x1, x2 = q[..., : hd // 2], q[..., hd // 2:]
-+    q_r = torch.cat([x1 * c - x2 * s_, x2 * c + x1 * s_], dim=-1)
-+    q_o = apply_rope(q, cos, sin)
-+    err = (q_o - q_r).abs().max().item() / q_r.abs().max().item()
-+    cond("apply_rope == NeoX rotation with vLLM's cache", err < 1e-5, f"rel err {err:.1e}")
-+    g = torch.randn(n, H, hd)
-+    lhs = (g * apply_rope(q, cos, sin)).sum()
-+    rhs = (rope_backward(g, cos, sin) * q).sum()
-+    cond("rope_backward is the adjoint under mscale", abs(lhs - rhs) / abs(lhs) < 1e-5)
-+
-+
-+def config_parsing(yarn_dir):
-+    print("rope_scaling_of")
-+    class C:  # transformers 5 / vLLM-normalized form
-+        rope_parameters = {"rope_theta": 1e6, "rope_type": "yarn", "factor": 4.0,
-+                           "original_max_position_embeddings": 32768}
-+    got = rope_scaling_of(C())
-+    cond("rope_parameters (yarn) parsed", got == {"rope_type": "yarn", "factor": 4.0,
-+                                                  "original_max_position_embeddings": 32768}, str(got))
-+    class P:
-+        rope_parameters = {"rope_theta": 1e6, "rope_type": "default"}
-+    cond("plain RoPE → None", rope_scaling_of(P()) is None)
-+    class L:
-+        rope_parameters = {"rope_theta": 5e5, "rope_type": "llama3", "factor": 8.0}
-+    try:
-+        rope_scaling_of(L())
-+        cond("unsupported scaling raises", False)
-+    except NotImplementedError:
-+        cond("unsupported scaling raises", True)
-+    if yarn_dir:
-+        try:
-+            got = rope_scaling_of(AutoConfig.from_pretrained(yarn_dir))
-+            cond(f"RSI-system YaRN model config parsed ({yarn_dir.rsplit('/', 1)[-1]})",
-+                 got is not None and got["factor"] == 4.0
-+                 and got["original_max_position_embeddings"] == 32768, str(got))
-+        except OSError as e:
-+            print(f"  (skip real config: {e})")
-+
-+
-+if __name__ == "__main__":
-+    ap = argparse.ArgumentParser()
-+    ap.add_argument("--yarn-config",
-+                    default="/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/models/Qwen3-32B-yarn131k")
-+    a = ap.parse_args()
-+    against_vllm()
-+    config_parsing(a.yarn_config)
-+    print(f"\n{PASS} passed, {FAIL} failed")
-+    sys.exit(1 if FAIL else 0)
-diff --git a/tests/test_adapter_export.py b/tests/test_adapter_export.py
-new file mode 100644
-index 0000000..661c7e9
---- /dev/null
-+++ b/tests/test_adapter_export.py
-@@ -0,0 +1,113 @@
-+"""FT adapter export (PEFT dir) gates — run with `python`, not pytest. CPU/gloo.
-+
-+1. TP=1: ``export_adapter`` writes the fp32 masters under their original PEFT
-+   names and full shapes, plus an adapter_config.json, and refreshes latest/.
-+2. TP=2: after identical training, the shards gathered + merged by rank 0
-+   equal the TP=1 export (q/k/v B row shards, o A column shards).
-+3. ``adapter_save_every`` exports from inside process_backward.
-+
-+    python tests/test_adapter_export.py
-+"""
-+
-+import json
-+import os
-+import sys
-+import tempfile
-+from pathlib import Path
-+
-+import torch
-+import torch.distributed as dist
-+import torch.multiprocessing as mp
-+from safetensors.torch import load_file
-+
-+TESTS = str(Path(__file__).resolve().parent)
-+sys.path.insert(0, TESTS)
-+import test_tp_trainer_graph_nccl as T  # noqa: E402
-+
-+T.GEOM["qwen3"].update(hidden=48, Hq=8, Hkv=4, inter=128)
-+PORT = 29741
-+PASS = FAIL = 0
-+
-+
-+def cond(name, ok, detail=""):
-+    global PASS, FAIL
-+    PASS += bool(ok)
-+    FAIL += not ok
-+    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
-+
-+
-+def train(svc, full, steps=3):
-+    starts = [0, T.SEQ_LENS[0]]
-+    for _ in range(steps):
-+        acts = T.remat_activations(svc, full["embed"], full["ids"], T.SEQ_LENS, starts)
-+        svc.process_backward(acts, T.SEQ_LENS, sum(T.SEQ_LENS), epoch=0)
-+
-+
-+def worker(rank, path, out):
-+    full = torch.load(path)
-+    meta = T.make_meta("qwen3", tp_size=2, tp_rank=rank, port=PORT, graph=False)
-+    svc = T.make_service("qwen3", T.shard_base(full["base"], rank, 2, "qwen3"),
-+                         full["ft"], meta, torch.device("cpu"))
-+    svc._src_adapter = None
-+    train(svc, full)
-+    svc.export_adapter(os.path.join(out, "tp2"))
-+    dist.destroy_process_group()
-+
-+
-+def main():
-+    full = T.build_full("qwen3", seed=11)
-+    with tempfile.TemporaryDirectory(prefix="adapter_export_") as tmp:
-+        # source adapter_config.json the export should copy
-+        src = os.path.join(tmp, "src")
-+        os.makedirs(src)
-+        json.dump({"peft_type": "LORA", "r": 4, "lora_alpha": 8,
-+                   "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"]},
-+                  open(os.path.join(src, "adapter_config.json"), "w"))
-+
-+        print("TP=1 export")
-+        meta = T.make_meta("qwen3", tp_size=1, tp_rank=0, port=0, graph=False)
-+        meta.update(adapter_save_dir=os.path.join(tmp, "periodic"), adapter_save_every=2,
-+                    finetuning_lora_path=src)
-+        ref = T.make_service("qwen3", full["base"], full["ft"], meta, torch.device("cpu"))
-+        train(ref, full)
-+        ref.export_adapter(os.path.join(tmp, "tp1"))
-+        sd = load_file(os.path.join(tmp, "tp1", "adapter_model.safetensors"))
-+        cond("same tensor names as the source adapter", set(sd) == set(full["ft"]))
-+        cond("full (unsharded) shapes", all(sd[k].shape == full["ft"][k].shape for k in sd))
-+        masters = {ref._lora_keys[k]: ref.lora[k[0]][k[1]][k[2]].detach() for k in ref._lora_keys}
-+        cond("values == fp32 masters", all(torch.equal(sd[k], masters[k]) for k in sd))
-+        cond("training moved the weights",
-+             any(not torch.equal(sd[k], full["ft"][k].float()) for k in sd))
-+        cfg = json.load(open(os.path.join(tmp, "tp1", "adapter_config.json")))
-+        cond("adapter_config copied (r, alpha, targets) + inference_mode",
-+             cfg["r"] == 4 and cfg["lora_alpha"] == 8 and cfg["inference_mode"] is True)
-+        cond("latest/ refreshed", os.path.exists(os.path.join(tmp, "latest", "adapter_model.safetensors")))
-+        cond("adapter_save_every=2 exported cycle2/ during training",
-+             os.path.exists(os.path.join(tmp, "periodic", "cycle2", "adapter_model.safetensors")))
-+
-+        print("TP=2 export (gloo) == TP=1")
-+        path = os.path.join(tmp, "full.pt")
-+        torch.save(full, path)
-+        ctx = mp.get_context("spawn")
-+        procs = [ctx.Process(target=worker, args=(r, path, tmp)) for r in range(2)]
-+        for p in procs:
-+            p.start()
-+        for p in procs:
-+            p.join(900)
-+        cond("both ranks exited cleanly", all(p.exitcode == 0 for p in procs),
-+             str([p.exitcode for p in procs]))
-+        f2 = os.path.join(tmp, "tp2", "adapter_model.safetensors")
-+        if os.path.exists(f2):
-+            sd2 = load_file(f2)
-+            err = max((sd2[k] - sd[k]).abs().max().item() / (sd[k].abs().max().item() + 1e-12)
-+                      for k in sd)
-+            cond("merged TP=2 adapter == TP=1 adapter", set(sd2) == set(sd) and err < 1e-4,
-+                 f"max rel err {err:.1e}")
-+        else:
-+            cond("rank 0 wrote the TP=2 adapter", False)
-+    print(f"\n{PASS} passed, {FAIL} failed")
-+    sys.exit(1 if FAIL else 0)
-+
-+
-+if __name__ == "__main__":
-+    main()
 diff --git a/tests/test_ft_ingest.py b/tests/test_ft_ingest.py
 new file mode 100644
 index 0000000..f046330
@@ -2375,6 +3913,153 @@ index 0000000..f046330
 +    ap.add_argument("--tokenizer", default="/mnt/weka/home/jianshu.she/scratch/Qwen3-32B")
 +    a = ap.parse_args()
 +    sys.exit(0 if main(AutoTokenizer.from_pretrained(a.tokenizer)) else 1)
+diff --git a/tests/test_ft_scheduler_idle_throttle.py b/tests/test_ft_scheduler_idle_throttle.py
+new file mode 100644
+index 0000000..351c041
+--- /dev/null
++++ b/tests/test_ft_scheduler_idle_throttle.py
+@@ -0,0 +1,103 @@
++"""An expiring RPS gate must not put live training to sleep."""
++
++from types import SimpleNamespace
++import unittest
++from unittest.mock import patch
++
++from vllm.config.finetune import FinetuneConfig
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++from vllm.deltaserve.ft_scheduler import FinetuneScheduler
++from vllm.v1.core.sched.async_scheduler import AsyncScheduler
++
++
++class IdleThrottleTest(unittest.TestCase):
++    def make_scheduler(self, relay):
++        coord = FinetuneCoordinator(512)
++        coord.relay_mode = relay
++        coord.rps_tracker.note_arrival(10.0)
++        self.check_rate(coord, 10.0)
++        scheduler = object.__new__(FinetuneScheduler)
++        scheduler._coord = coord
++        scheduler._profiling_mode = False
++        scheduler.vllm_config = SimpleNamespace(
++            finetune_config=FinetuneConfig(enable_finetuning=True)
++        )
++        scheduler._ft_injector = SimpleNamespace(
++            store=SimpleNamespace(
++                has_next=lambda: True,
++                current_epoch=0,
++                total_epochs=1,
++                sorted_lengths=[32],
++                has_claimed=lambda: False,
++            )
++        )
++        return scheduler, coord
++
++    def check_rate(self, coord, now):
++        coord.check_rps_throttle(
++            now, close_rps=5, open_rps=2, window_s=0.1, close_time=1
++        )
++
++    def has_idle_work(self, scheduler):
++        # The inference scheduler reports no more requests. This is exactly
++        # when EngineCore otherwise blocks waiting for another client request.
++        with patch.object(AsyncScheduler, "has_requests", return_value=False):
++            return scheduler.has_requests()
++
++    def test_throttle_keeps_engine_alive_until_quiet_window(self):
++        for relay in (False, True):
++            with self.subTest(relay=relay):
++                scheduler, coord = self.make_scheduler(relay)
++                self.assertEqual(coord.next_ft_budget(), 0)
++                self.assertTrue(self.has_idle_work(scheduler))
++                self.assertFalse(getattr(scheduler, "_ft_exhausted_logged", False))
++                # schedule() can now run again after the rate window expires.
++                self.check_rate(coord, 10.2)
++                self.assertFalse(coord.rps_throttle_active)
++                self.assertEqual(coord.next_ft_budget(), 512)
++                self.assertTrue(self.has_idle_work(scheduler))
++
++    def test_backward_done_does_not_sleep_while_rate_gate_is_held(self):
++        for relay in (False, True):
++            with self.subTest(relay=relay):
++                scheduler, coord = self.make_scheduler(relay)
++                coord.pending_backward = True
++                response = {"event": "activations_processed", "n": 512}
++                if relay:
++                    coord.apply_relayed_done(response)
++                else:
++                    coord.backward_process = SimpleNamespace(
++                        poll_response=lambda: response
++                    )
++                    coord.poll_backward()
++                self.assertFalse(coord.pending_backward)
++                self.assertTrue(coord.rps_throttle_active)
++                self.assertEqual(coord.next_ft_budget(), 0)
++                self.assertTrue(self.has_idle_work(scheduler))
++
++    def test_stopped_and_profiling_training_can_sleep(self):
++        scheduler, coord = self.make_scheduler(False)
++        coord.ft_started = False
++        self.assertFalse(self.has_idle_work(scheduler))
++        coord.ft_started = True
++        scheduler._profiling_mode = True
++        self.assertFalse(self.has_idle_work(scheduler))
++        scheduler._profiling_mode = False
++        scheduler.vllm_config.finetune_config.enable_finetuning = False
++        self.assertFalse(self.has_idle_work(scheduler))
++
++    def test_exhausted_data_can_sleep_with_stale_rate_gate(self):
++        scheduler, _ = self.make_scheduler(False)
++        store = scheduler._ft_injector.store
++        store.has_next = lambda: False
++        store.current_epoch = store.total_epochs
++        self.assertFalse(self.has_idle_work(scheduler))
++
++    def test_next_epoch_keeps_rate_gate_polling(self):
++        scheduler, _ = self.make_scheduler(False)
++        scheduler._ft_injector.store.has_next = lambda: False
++        self.assertTrue(self.has_idle_work(scheduler))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_fwd_token_throttle.py b/tests/test_fwd_token_throttle.py
+new file mode 100644
+index 0000000..63d31f7
+--- /dev/null
++++ b/tests/test_fwd_token_throttle.py
+@@ -0,0 +1,32 @@
++"""The shared pause/release predicate must protect a one-token decode."""
++import unittest
++
++from vllm.config.finetune import FinetuneConfig
++
++
++class ForwardThrottleTest(unittest.TestCase):
++    def test_zero_threshold_protects_single_decode(self):
++        cfg = FinetuneConfig(fwd_token_throttle_enable=True,
++                             fwd_token_throttle=0)
++        self.assertTrue(cfg.should_throttle_backward(1))
++        self.assertTrue(cfg.should_throttle_backward(512))
++        # Both an empty step and pure FT have zero inference tokens: release.
++        self.assertFalse(cfg.should_throttle_backward(0))
++
++    def test_positive_threshold_remains_strict(self):
++        cfg = FinetuneConfig(fwd_token_throttle_enable=True,
++                             fwd_token_throttle=32)
++        self.assertFalse(cfg.should_throttle_backward(32))
++        self.assertTrue(cfg.should_throttle_backward(33))
++
++    def test_disabled_and_negative_threshold(self):
++        cfg = FinetuneConfig(fwd_token_throttle_enable=False,
++                             fwd_token_throttle=0)
++        self.assertFalse(cfg.should_throttle_backward(512))
++        cfg.fwd_token_throttle_enable = True
++        cfg.fwd_token_throttle = -1
++        self.assertFalse(cfg.should_throttle_backward(512))
++
++
++if __name__ == '__main__':
++    unittest.main()
 diff --git a/tests/test_long_context_backward.py b/tests/test_long_context_backward.py
 new file mode 100644
 index 0000000..52e1eaf
@@ -2538,6 +4223,194 @@ index 0000000..52e1eaf
 +    long_attention_cost()
 +    print(f"\n{PASS} passed, {FAIL} failed")
 +    sys.exit(1 if FAIL else 0)
+diff --git a/tests/test_rope_yarn.py b/tests/test_rope_yarn.py
+new file mode 100644
+index 0000000..1dc7994
+--- /dev/null
++++ b/tests/test_rope_yarn.py
+@@ -0,0 +1,115 @@
++"""Backward RoPE with YaRN == vLLM's YaRNScalingRotaryEmbedding (run with `python`).
++
++RSI-system serves Qwen3-32B with YaRN x4 (131072 ctx). YaRN changes the rotary
++frequencies at EVERY position and scales cos/sin by mscale, so the backward's
++RoPE remat must reproduce it exactly or the LoRA gradients are wrong.
++
++    python tests/test_rope_yarn.py [--yarn-config DIR]
++"""
++
++from __future__ import annotations
++
++import argparse
++import sys
++
++import torch
++from transformers import AutoConfig
++
++from vllm.deltaserve.bwd_services.common.ops import apply_rope, rope_backward, rope_cos_sin
++from vllm.deltaserve.ft_meta import rope_scaling_of
++from vllm.model_executor.layers.rotary_embedding.yarn_scaling_rope import (
++    YaRNScalingRotaryEmbedding,
++)
++
++PASS = FAIL = 0
++
++
++def cond(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
++
++
++def _vllm_yarn_cache(hd, orig, theta, factor):
++    """vLLM's own YaRN cos/sin cache, via its methods on a bare instance (the
++    CustomOp constructor needs a device-bearing vLLM config; the math does not)."""
++    from vllm.model_executor.layers.rotary_embedding.common import yarn_get_mscale
++    ref = object.__new__(YaRNScalingRotaryEmbedding)
++    ref.head_size = ref.rotary_dim = hd
++    ref.max_position_embeddings = orig
++    ref.base = theta
++    ref.scaling_factor = factor
++    ref.extrapolation_factor = ref.attn_factor = 1
++    ref.beta_fast, ref.beta_slow, ref.truncate = 32, 1, True
++    ref.mscale = float(yarn_get_mscale(factor))
++    return ref._compute_cos_sin_cache()
++
++
++def against_vllm(theta=1e6, hd=128, factor=4.0, orig=32768):
++    print(f"cos/sin + rotation vs vLLM YaRN (theta={theta:g}, head_dim={hd}, x{factor:g})")
++    cache_all = _vllm_yarn_cache(hd, orig, theta, factor)
++    sc = {"rope_type": "yarn", "factor": factor, "original_max_position_embeddings": orig}
++    pos = torch.tensor([0, 1, 7, 513, 4095, 32767, 40000, 131071])
++    cache = cache_all[pos].float()
++    cos_r, sin_r = cache[:, : hd // 2], cache[:, hd // 2:]
++    cos, sin = rope_cos_sin(pos, hd, theta, sc)
++    err = max((cos - cos_r).abs().max().item(), (sin - sin_r).abs().max().item())
++    cond("cos/sin == vLLM YaRN cache (incl. mscale)", err < 1e-5, f"max abs err {err:.1e}")
++    plain_c, _ = rope_cos_sin(pos, hd, theta)
++    cond("YaRN differs from plain RoPE (so the fix matters)",
++         (plain_c - cos).abs().max().item() > 1e-2)
++
++    torch.manual_seed(0)
++    n, H = len(pos), 4
++    q = torch.randn(n, H, hd)
++    # NeoX rotation with vLLM's cache, written out independently
++    c, s_ = cos_r[:, None, :], sin_r[:, None, :]
++    x1, x2 = q[..., : hd // 2], q[..., hd // 2:]
++    q_r = torch.cat([x1 * c - x2 * s_, x2 * c + x1 * s_], dim=-1)
++    q_o = apply_rope(q, cos, sin)
++    err = (q_o - q_r).abs().max().item() / q_r.abs().max().item()
++    cond("apply_rope == NeoX rotation with vLLM's cache", err < 1e-5, f"rel err {err:.1e}")
++    g = torch.randn(n, H, hd)
++    lhs = (g * apply_rope(q, cos, sin)).sum()
++    rhs = (rope_backward(g, cos, sin) * q).sum()
++    cond("rope_backward is the adjoint under mscale", abs(lhs - rhs) / abs(lhs) < 1e-5)
++
++
++def config_parsing(yarn_dir):
++    print("rope_scaling_of")
++    class C:  # transformers 5 / vLLM-normalized form
++        rope_parameters = {"rope_theta": 1e6, "rope_type": "yarn", "factor": 4.0,
++                           "original_max_position_embeddings": 32768}
++    got = rope_scaling_of(C())
++    cond("rope_parameters (yarn) parsed", got == {"rope_type": "yarn", "factor": 4.0,
++                                                  "original_max_position_embeddings": 32768}, str(got))
++    class P:
++        rope_parameters = {"rope_theta": 1e6, "rope_type": "default"}
++    cond("plain RoPE → None", rope_scaling_of(P()) is None)
++    class L:
++        rope_parameters = {"rope_theta": 5e5, "rope_type": "llama3", "factor": 8.0}
++    try:
++        rope_scaling_of(L())
++        cond("unsupported scaling raises", False)
++    except NotImplementedError:
++        cond("unsupported scaling raises", True)
++    if yarn_dir:
++        try:
++            got = rope_scaling_of(AutoConfig.from_pretrained(yarn_dir))
++            cond(f"RSI-system YaRN model config parsed ({yarn_dir.rsplit('/', 1)[-1]})",
++                 got is not None and got["factor"] == 4.0
++                 and got["original_max_position_embeddings"] == 32768, str(got))
++        except OSError as e:
++            print(f"  (skip real config: {e})")
++
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--yarn-config",
++                    default="/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/models/Qwen3-32B-yarn131k")
++    a = ap.parse_args()
++    against_vllm()
++    config_parsing(a.yarn_config)
++    print(f"\n{PASS} passed, {FAIL} failed")
++    sys.exit(1 if FAIL else 0)
+diff --git a/tests/test_rps_throttle_admission.py b/tests/test_rps_throttle_admission.py
+new file mode 100644
+index 0000000..48bbc30
+--- /dev/null
++++ b/tests/test_rps_throttle_admission.py
+@@ -0,0 +1,61 @@
++"""RPS admission must survive backward completion and FT abort rollback."""
++import unittest
++from types import SimpleNamespace
++
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++
++
++class RpsAdmissionTest(unittest.TestCase):
++    def make_coord(self):
++        coord = FinetuneCoordinator(512)
++        coord.rps_tracker.note_arrival(10.0)
++        self.check(coord, 10.0)
++        self.assertTrue(coord.rps_throttle_active)
++        self.assertEqual(coord.next_ft_budget(), 0)
++        return coord
++
++    def check(self, coord, now):
++        coord.check_rps_throttle(now, close_rps=5, open_rps=2,
++                                 window_s=.1, close_time=1)
++
++    def test_tp_backward_done_cannot_bypass_throttle(self):
++        coord = self.make_coord()
++        coord.relay_mode = True
++        coord.pending_backward = True
++        coord.apply_relayed_done({'event': 'activations_processed', 'n': 512})
++        self.check(coord, 10.01)
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++    def test_single_rank_backward_done_cannot_bypass_throttle(self):
++        coord = self.make_coord()
++        coord.pending_backward = True
++        coord.backward_process = SimpleNamespace(poll_response=lambda: {'event': 'activations_processed', 'n': 512})
++        coord.poll_backward()
++        self.check(coord, 10.01)
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++    def test_abort_snapshot_cannot_bypass_throttle(self):
++        coord = FinetuneCoordinator(512)
++        snapshot = coord.snapshot_admission()
++        coord.rps_tracker.note_arrival(10.0)
++        self.check(coord, 10.0)
++        coord.restore_admission(snapshot)
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++    def test_quiet_window_releases_and_preserves_other_gates(self):
++        coord = self.make_coord()
++        self.check(coord, 10.2)
++        self.assertFalse(coord.rps_throttle_active)
++        self.assertEqual(coord.next_ft_budget(), 512)
++        coord.pending_backward = True
++        self.assertEqual(coord.next_ft_budget(), 0)
++        coord.pending_backward = False
++        coord.reserved_fill = 512
++        self.assertEqual(coord.next_ft_budget(), 0)
++        coord.reserved_fill = 0
++        coord.ft_started = False
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++
++if __name__ == '__main__':
++    unittest.main()
 diff --git a/tests/test_tp_bucket_optional_lora.py b/tests/test_tp_bucket_optional_lora.py
 new file mode 100644
 index 0000000..262a8af
@@ -2624,333 +4497,18 @@ index 0000000..262a8af
 +
 +if __name__ == "__main__":
 +    main()
-diff --git a/tests/test_backward_pause_resume.py b/tests/test_backward_pause_resume.py
-new file mode 100644
-index 0000000..74e8e65
---- /dev/null
-+++ b/tests/test_backward_pause_resume.py
-@@ -0,0 +1,110 @@
-+"""Backward resumes during idle without cancelling a newer throttle pause."""
-+
-+from contextlib import nullcontext
-+import unittest
-+from types import SimpleNamespace
-+from unittest.mock import Mock, patch
-+
-+from vllm.config.finetune import FinetuneConfig
-+from vllm.v1.worker.gpu_model_runner import GPUModelRunner
-+
-+
-+class PauseResumeTest(unittest.TestCase):
-+    def make_idle_runner(self, event, relay_mode):
-+        coord = Mock(relay_mode=relay_mode)
-+        runner = SimpleNamespace(
-+            execute_model_state=None,
-+            routed_experts_initialized=False,
-+            speculative_config=None,
-+            parallel_config=SimpleNamespace(distributed_executor_backend="mp"),
-+            vllm_config=SimpleNamespace(
-+                finetune_config=FinetuneConfig(
-+                    fwd_token_throttle_enable=True, fwd_token_throttle=0
-+                )
-+            ),
-+            synchronize_input_prep=nullcontext,
-+            _update_states=Mock(),
-+            _ft_fill_relay_fields=Mock(),
-+            _ft_coordinator=coord,
-+            _ft_resume_evt=event,
-+            _throttle_held=False,
-+        )
-+        runner._ft_maybe_resume_backward = lambda c: (
-+            GPUModelRunner._ft_maybe_resume_backward(runner, c)
-+        )
-+        return runner, coord
-+
-+    def execute_idle(self, runner):
-+        output = SimpleNamespace(total_num_scheduled_tokens=0)
-+        module = "vllm.v1.worker.gpu_model_runner"
-+        with (
-+            patch(module + ".has_kv_transfer_group", return_value=False),
-+            patch(module + ".has_ec_transfer", return_value=False),
-+        ):
-+            return GPUModelRunner.execute_model(runner, output)
-+
-+    def test_idle_step_resumes_completed_ft_forward_without_throttle(self):
-+        for relay in (False, True):
-+            with self.subTest(relay_mode=relay):
-+                event = Mock(query=Mock(return_value=True))
-+                runner, coord = self.make_idle_runner(event, relay)
-+                self.execute_idle(runner)
-+                coord.gpu_resume_backward.assert_called_once_with()
-+                self.assertIsNone(runner._ft_resume_evt)
-+                # A later idle poll must not release the grant a second time.
-+                self.execute_idle(runner)
-+                coord.gpu_resume_backward.assert_called_once_with()
-+
-+    def test_idle_step_retries_event_after_sample_tokens_misses_completion(self):
-+        for relay in (False, True):
-+            with self.subTest(relay_mode=relay):
-+                event = Mock(query=Mock(side_effect=[False, False, True]))
-+                runner, coord = self.make_idle_runner(event, relay)
-+                # The same event poll used by sample_tokens runs before the
-+                # GPU completes. Idle execute_model calls must keep polling.
-+                runner._ft_maybe_resume_backward(coord)
-+                self.execute_idle(runner)
-+                coord.gpu_resume_backward.assert_not_called()
-+                self.assertIs(runner._ft_resume_evt, event)
-+                self.execute_idle(runner)
-+                coord.gpu_resume_backward.assert_called_once_with()
-+                self.assertIsNone(runner._ft_resume_evt)
-+
-+    def test_idle_step_releases_sticky_throttle(self):
-+        runner, coord = self.make_idle_runner(None, True)
-+        runner._throttle_held = True
-+        coord.fwd_throttle_active = True
-+        self.execute_idle(runner)
-+        coord.gpu_resume_backward.assert_called_once_with()
-+        self.assertFalse(runner._throttle_held)
-+        self.assertFalse(coord.fwd_throttle_active)
-+
-+    def test_completed_prefill_keeps_new_throttle_pause(self):
-+        runner = SimpleNamespace(
-+            _ft_resume_evt=Mock(query=lambda: True), _throttle_held=True
-+        )
-+        coord = Mock()
-+        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
-+        coord.gpu_resume_backward.assert_not_called()
-+        self.assertIsNone(runner._ft_resume_evt)
-+
-+    def test_completed_prefill_without_throttle_resumes(self):
-+        runner = SimpleNamespace(
-+            _ft_resume_evt=Mock(query=lambda: True), _throttle_held=False
-+        )
-+        coord = Mock()
-+        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
-+        coord.gpu_resume_backward.assert_called_once_with()
-+        self.assertIsNone(runner._ft_resume_evt)
-+
-+    def test_unfinished_prefill_does_not_resume(self):
-+        event = Mock(query=lambda: False)
-+        runner = SimpleNamespace(_ft_resume_evt=event, _throttle_held=False)
-+        coord = Mock()
-+        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
-+        coord.gpu_resume_backward.assert_not_called()
-+        self.assertIs(runner._ft_resume_evt, event)
-+
-+
-+if __name__ == "__main__":
-+    unittest.main()
-diff --git a/tests/test_ft_scheduler_idle_throttle.py b/tests/test_ft_scheduler_idle_throttle.py
-new file mode 100644
-index 0000000..351c041
---- /dev/null
-+++ b/tests/test_ft_scheduler_idle_throttle.py
-@@ -0,0 +1,103 @@
-+"""An expiring RPS gate must not put live training to sleep."""
-+
-+from types import SimpleNamespace
-+import unittest
-+from unittest.mock import patch
-+
-+from vllm.config.finetune import FinetuneConfig
-+from vllm.deltaserve.coordinator import FinetuneCoordinator
-+from vllm.deltaserve.ft_scheduler import FinetuneScheduler
-+from vllm.v1.core.sched.async_scheduler import AsyncScheduler
-+
-+
-+class IdleThrottleTest(unittest.TestCase):
-+    def make_scheduler(self, relay):
-+        coord = FinetuneCoordinator(512)
-+        coord.relay_mode = relay
-+        coord.rps_tracker.note_arrival(10.0)
-+        self.check_rate(coord, 10.0)
-+        scheduler = object.__new__(FinetuneScheduler)
-+        scheduler._coord = coord
-+        scheduler._profiling_mode = False
-+        scheduler.vllm_config = SimpleNamespace(
-+            finetune_config=FinetuneConfig(enable_finetuning=True)
-+        )
-+        scheduler._ft_injector = SimpleNamespace(
-+            store=SimpleNamespace(
-+                has_next=lambda: True,
-+                current_epoch=0,
-+                total_epochs=1,
-+                sorted_lengths=[32],
-+                has_claimed=lambda: False,
-+            )
-+        )
-+        return scheduler, coord
-+
-+    def check_rate(self, coord, now):
-+        coord.check_rps_throttle(
-+            now, close_rps=5, open_rps=2, window_s=0.1, close_time=1
-+        )
-+
-+    def has_idle_work(self, scheduler):
-+        # The inference scheduler reports no more requests. This is exactly
-+        # when EngineCore otherwise blocks waiting for another client request.
-+        with patch.object(AsyncScheduler, "has_requests", return_value=False):
-+            return scheduler.has_requests()
-+
-+    def test_throttle_keeps_engine_alive_until_quiet_window(self):
-+        for relay in (False, True):
-+            with self.subTest(relay=relay):
-+                scheduler, coord = self.make_scheduler(relay)
-+                self.assertEqual(coord.next_ft_budget(), 0)
-+                self.assertTrue(self.has_idle_work(scheduler))
-+                self.assertFalse(getattr(scheduler, "_ft_exhausted_logged", False))
-+                # schedule() can now run again after the rate window expires.
-+                self.check_rate(coord, 10.2)
-+                self.assertFalse(coord.rps_throttle_active)
-+                self.assertEqual(coord.next_ft_budget(), 512)
-+                self.assertTrue(self.has_idle_work(scheduler))
-+
-+    def test_backward_done_does_not_sleep_while_rate_gate_is_held(self):
-+        for relay in (False, True):
-+            with self.subTest(relay=relay):
-+                scheduler, coord = self.make_scheduler(relay)
-+                coord.pending_backward = True
-+                response = {"event": "activations_processed", "n": 512}
-+                if relay:
-+                    coord.apply_relayed_done(response)
-+                else:
-+                    coord.backward_process = SimpleNamespace(
-+                        poll_response=lambda: response
-+                    )
-+                    coord.poll_backward()
-+                self.assertFalse(coord.pending_backward)
-+                self.assertTrue(coord.rps_throttle_active)
-+                self.assertEqual(coord.next_ft_budget(), 0)
-+                self.assertTrue(self.has_idle_work(scheduler))
-+
-+    def test_stopped_and_profiling_training_can_sleep(self):
-+        scheduler, coord = self.make_scheduler(False)
-+        coord.ft_started = False
-+        self.assertFalse(self.has_idle_work(scheduler))
-+        coord.ft_started = True
-+        scheduler._profiling_mode = True
-+        self.assertFalse(self.has_idle_work(scheduler))
-+        scheduler._profiling_mode = False
-+        scheduler.vllm_config.finetune_config.enable_finetuning = False
-+        self.assertFalse(self.has_idle_work(scheduler))
-+
-+    def test_exhausted_data_can_sleep_with_stale_rate_gate(self):
-+        scheduler, _ = self.make_scheduler(False)
-+        store = scheduler._ft_injector.store
-+        store.has_next = lambda: False
-+        store.current_epoch = store.total_epochs
-+        self.assertFalse(self.has_idle_work(scheduler))
-+
-+    def test_next_epoch_keeps_rate_gate_polling(self):
-+        scheduler, _ = self.make_scheduler(False)
-+        scheduler._ft_injector.store.has_next = lambda: False
-+        self.assertTrue(self.has_idle_work(scheduler))
-+
-+
-+if __name__ == "__main__":
-+    unittest.main()
-diff --git a/tests/test_fwd_token_throttle.py b/tests/test_fwd_token_throttle.py
-new file mode 100644
-index 0000000..63d31f7
---- /dev/null
-+++ b/tests/test_fwd_token_throttle.py
-@@ -0,0 +1,32 @@
-+"""The shared pause/release predicate must protect a one-token decode."""
-+import unittest
-+
-+from vllm.config.finetune import FinetuneConfig
-+
-+
-+class ForwardThrottleTest(unittest.TestCase):
-+    def test_zero_threshold_protects_single_decode(self):
-+        cfg = FinetuneConfig(fwd_token_throttle_enable=True,
-+                             fwd_token_throttle=0)
-+        self.assertTrue(cfg.should_throttle_backward(1))
-+        self.assertTrue(cfg.should_throttle_backward(512))
-+        # Both an empty step and pure FT have zero inference tokens: release.
-+        self.assertFalse(cfg.should_throttle_backward(0))
-+
-+    def test_positive_threshold_remains_strict(self):
-+        cfg = FinetuneConfig(fwd_token_throttle_enable=True,
-+                             fwd_token_throttle=32)
-+        self.assertFalse(cfg.should_throttle_backward(32))
-+        self.assertTrue(cfg.should_throttle_backward(33))
-+
-+    def test_disabled_and_negative_threshold(self):
-+        cfg = FinetuneConfig(fwd_token_throttle_enable=False,
-+                             fwd_token_throttle=0)
-+        self.assertFalse(cfg.should_throttle_backward(512))
-+        cfg.fwd_token_throttle_enable = True
-+        cfg.fwd_token_throttle = -1
-+        self.assertFalse(cfg.should_throttle_backward(512))
-+
-+
-+if __name__ == '__main__':
-+    unittest.main()
-diff --git a/tests/test_rps_throttle_admission.py b/tests/test_rps_throttle_admission.py
-new file mode 100644
-index 0000000..48bbc30
---- /dev/null
-+++ b/tests/test_rps_throttle_admission.py
-@@ -0,0 +1,61 @@
-+"""RPS admission must survive backward completion and FT abort rollback."""
-+import unittest
-+from types import SimpleNamespace
-+
-+from vllm.deltaserve.coordinator import FinetuneCoordinator
-+
-+
-+class RpsAdmissionTest(unittest.TestCase):
-+    def make_coord(self):
-+        coord = FinetuneCoordinator(512)
-+        coord.rps_tracker.note_arrival(10.0)
-+        self.check(coord, 10.0)
-+        self.assertTrue(coord.rps_throttle_active)
-+        self.assertEqual(coord.next_ft_budget(), 0)
-+        return coord
-+
-+    def check(self, coord, now):
-+        coord.check_rps_throttle(now, close_rps=5, open_rps=2,
-+                                 window_s=.1, close_time=1)
-+
-+    def test_tp_backward_done_cannot_bypass_throttle(self):
-+        coord = self.make_coord()
-+        coord.relay_mode = True
-+        coord.pending_backward = True
-+        coord.apply_relayed_done({'event': 'activations_processed', 'n': 512})
-+        self.check(coord, 10.01)
-+        self.assertEqual(coord.next_ft_budget(), 0)
-+
-+    def test_single_rank_backward_done_cannot_bypass_throttle(self):
-+        coord = self.make_coord()
-+        coord.pending_backward = True
-+        coord.backward_process = SimpleNamespace(poll_response=lambda: {'event': 'activations_processed', 'n': 512})
-+        coord.poll_backward()
-+        self.check(coord, 10.01)
-+        self.assertEqual(coord.next_ft_budget(), 0)
-+
-+    def test_abort_snapshot_cannot_bypass_throttle(self):
-+        coord = FinetuneCoordinator(512)
-+        snapshot = coord.snapshot_admission()
-+        coord.rps_tracker.note_arrival(10.0)
-+        self.check(coord, 10.0)
-+        coord.restore_admission(snapshot)
-+        self.assertEqual(coord.next_ft_budget(), 0)
-+
-+    def test_quiet_window_releases_and_preserves_other_gates(self):
-+        coord = self.make_coord()
-+        self.check(coord, 10.2)
-+        self.assertFalse(coord.rps_throttle_active)
-+        self.assertEqual(coord.next_ft_budget(), 512)
-+        coord.pending_backward = True
-+        self.assertEqual(coord.next_ft_budget(), 0)
-+        coord.pending_backward = False
-+        coord.reserved_fill = 512
-+        self.assertEqual(coord.next_ft_budget(), 0)
-+        coord.reserved_fill = 0
-+        coord.ft_started = False
-+        self.assertEqual(coord.next_ft_budget(), 0)
-+
-+
-+if __name__ == '__main__':
-+    unittest.main()
+diff --git a/tests/test_tp_trainer_graph_nccl.py b/tests/test_tp_trainer_graph_nccl.py
+index a9bbc04..8867fa3 100644
+--- a/tests/test_tp_trainer_graph_nccl.py
++++ b/tests/test_tp_trainer_graph_nccl.py
+@@ -168,6 +168,10 @@ def make_meta(fam_name, *, tp_size, tp_rank, port, graph, save_rm=False):
+ 
+ def make_service(fam_name, base, ft, meta, device):
+     svc = SERVICES[fam_name](device.index if device.type == "cuda" else 0)
++    if device.type == "cpu":
++        # The gloo regression tests reuse this harness without a CUDA device.
++        # Run-ahead throttling records CUDA events and only applies on GPUs.
++        meta = dict(meta, backward_run_ahead_boundaries=0)
+     svc.shared = {"base": {k: v.to(device) for k, v in base.items()},
+                   "ft": {k: v.to(device) for k, v in ft.items()},
+                   "meta": meta}

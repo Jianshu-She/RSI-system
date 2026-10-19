@@ -7,10 +7,9 @@ source "$_ds_here/../benchmarks/ace/env.sh"          # ACE_ROOT ACE_WORK_DIR ACE
 
 export DS_HOME="$_ds_here"                                   # this directory
 export DS_WORK="${DS_WORK:-$DS_HOME/work}"                   # outputs: runs/, adapters/, logs (git-ignored)
-# DeltaServe-vLLM checkout at DS_COMMIT with patches/deltaserve-vllm.patch applied (setup.sh does both)
-export DS_REPO="${DS_REPO:-git@github.com:852866031/DeltaServe-vLLM.git}"
-export DS_COMMIT="${DS_COMMIT:-eea2a4a40645964383d9cd2b36c183053ac5c31f}"
-export DS_ROOT="${DS_ROOT:-$DS_WORK/DeltaServe-vLLM}"
+# DeltaServe-vLLM source, vendored in this folder (= github.com/852866031/DeltaServe-vLLM @ eea2a4a
+# + patches/deltaserve-vllm.patch). Point DS_ROOT elsewhere only to run another checkout.
+export DS_ROOT="${DS_ROOT:-$DS_HOME/DeltaServe-vLLM}"
 export DS_ENV="${DS_ENV:-$HOME/miniconda3/envs/dserve-vllm}"  # env with the dserve-vllm package (editable from DS_ROOT)
 export DS_CUDA_HOME="${DS_CUDA_HOME:-/usr/local/cuda-13.2}"   # nvcc >= 12.9 for FlashInfer's JIT
 export FLASHINFER_WORKSPACE_BASE="${FLASHINFER_WORKSPACE_BASE:-$HOME/.cache/flashinfer-dserve}"  # env-private JIT cache

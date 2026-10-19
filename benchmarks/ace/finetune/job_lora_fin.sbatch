@@ -50,7 +50,7 @@ done
 for i in 0 1 2; do for k in $(seq 120); do curl -s 127.0.0.1:${P[$i]}/v1/models | grep -q finer && break; sleep 10; done; done
 echo "=== $(date '+%F %T') serving"
 cd $ACE_UPSTREAM_DIR
-EMPTY=$ACE_ROOT/eval/empty_context.txt
+EMPTY=$ACE_ROOT/../../deltaserve/configs/empty_context.txt
 BEST_FORMULA=$(ls $ACE_RESULTS_DIR/finance/formula_offline_gt/*/best_playbook.txt)
 fin_eval() {  # $1 port  $2 model  $3 task  $4 context  $5 tag
   LOCAL_LLM_URL=http://127.0.0.1:$1/v1 EVAL_MODEL=$2 EVAL_LOG_DIR=$RUN/raw_$5 $ACE_PY $ACE_ROOT/eval/eval_split.py $3 test $4 $RUN/eval_$5.json > $RUN/logs/eval_$5.log 2>&1
