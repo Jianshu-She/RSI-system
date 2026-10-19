@@ -9,6 +9,7 @@ on an agent benchmark, turn the agent's own trajectories into training data, fin
 |---|---|---|---|
 | [WebArena-Shopping](benchmarks/webarena_reasoningbank) (187 tasks, web agent) | [ReasoningBank](https://arxiv.org/abs/2509.25140) (memory of distilled strategies) | eval (no memory / ReasoningBank / cross-check judge), trajectory → SFT data, LoRA, eval on unseen templates | [RESULTS](benchmarks/webarena_reasoningbank/results/RESULTS.md) |
 | [ACE](benchmarks/ace): Finance (FiNER, Formula) + AppWorld | [Agentic Context Engineering](https://arxiv.org/abs/2510.04618) (evolving playbook) | eval (base / ICL / Dynamic Cheatsheet / ACE offline+online ±GT), playbook-distillation SFT data, LoRA, eval | [RESULTS](benchmarks/ace/results/RESULTS.md) |
+| [DeltaServe co-serving loop](deltaserve) (ACE Formula) | RSI **online on one server**: serve → own traces → ingest → LoRA trains in the inference gaps ([DeltaServe](https://github.com/852866031/DeltaServe-vLLM)) | one-command end-to-end script, DeltaServe patch, configs, ACE-protocol eval | [RESULTS](deltaserve/results/RESULTS.md) |
 
 ## Layout
 ```
@@ -23,6 +24,7 @@ benchmarks/<name>/
   finetune/              benchmark-specific training jobs (calls rsi/finetune or a pinned copy)
   eval/ or tools/        scoring, paired significance tests, audits
   results/               RESULTS.md (numbers + caveats), raw summaries, experiment logs
+deltaserve/              the ACE loop online: one DeltaServe (vLLM fork) server serves, learns from its own traces, trains in the gaps
 ```
 
 ## Typical workflow

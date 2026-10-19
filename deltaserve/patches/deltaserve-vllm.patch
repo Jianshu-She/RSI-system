@@ -1,0 +1,2956 @@
+diff --git a/dserve-vllm/vllm/config/finetune.py b/dserve-vllm/vllm/config/finetune.py
+index 7d6d4be..2fc3157 100644
+--- a/dserve-vllm/vllm/config/finetune.py
++++ b/dserve-vllm/vllm/config/finetune.py
+@@ -42,7 +42,23 @@ class FinetuneConfig:
+ 
+     data_path: str | None = None
+     """Path to the finetuning corpus: one tokenizable sample per non-empty line.
+-    Loaded + tokenized at startup by the FinetuningStore."""
++    Loaded + tokenized at startup by the FinetuningStore. A ``.jsonl`` path is
++    read as chat SFT data instead (``{"messages": [...]}`` per line, the
++    RSI-system format): rendered with the model's chat template and trained
++    with the loss on the assistant tokens only (see ``chat_loss_on``)."""
++
++    chat_loss_on: str = "all"
++    """[chat .jsonl data] Which tokens carry the loss, mirroring RSI-system's
++    trainers (``deltaserve/chat_sft.py``): ``"last"`` = the final assistant
++    turn, prompt rendered by the official chat template (one row = one agent
++    step); ``"all"`` = every assistant turn, built turn by turn; ``"ace"`` =
++    the ACE trainer (template up to the first assistant turn after the
++    few-shot demo, loss on every assistant turn after it, thinking off)."""
++
++    chat_thinking: str = "off"
++    """[chat .jsonl data] ``"off"`` renders with ``enable_thinking=False`` and
++    prefixes each assistant turn with the empty think block the model saw at
++    inference; ``"on"`` keeps the assistant content's own ``<think>`` block."""
+ 
+     num_epochs: int = 1
+     """Number of passes over the finetuning corpus (FinetuningStore.advance_epoch)."""
+@@ -101,6 +117,32 @@ class FinetuneConfig:
+     """Per-backward FT token budget. Also sizes the shared activation buffers and
+     bounds length-bucketed sample selection."""
+ 
++    adapter_save_dir: str | None = None
++    """Export the trained FT adapter as a standard PEFT adapter directory
++    (``adapter_model.safetensors`` + ``adapter_config.json``, loadable with
++    ``--lora-modules name=<dir>``) under this directory: ``cycle<N>/`` every
++    ``adapter_save_every`` backward cycles, plus ``latest/``. Under TP the
++    rank shards are gathered and rank 0 writes. None = never export."""
++
++    adapter_save_every: int = 100
++    """[adapter_save_dir] Backward cycles between exports."""
++
++    backward_batch_tokens: int = 0
++    """[long context] Backward batch size in tokens, decoupled from the buffer
++    capacity (``max_saved_finetuning_tokens``). 0 = the capacity (unchanged
++    behaviour). When smaller, short samples trigger a backward once ~this many
++    tokens are saved, while a single sample longer than this still fits the
++    whole buffer on its own (it is admitted only into an empty buffer). Lets a
++    16K-token buffer hold one long sample without turning every short-sample
++    cycle into a 16K-token batch."""
++
++    backward_cuda_graph_max_tokens: int = 0
++    """[backward_cuda_graph] Row count the backward CUDA graphs are captured at
++    (their static ``s_max``). 0 = ``max_saved_finetuning_tokens`` (unchanged).
++    Backwards with more rows than this run the whole cycle eager. Set it to the
++    short-sample batch size when the buffer is sized for long samples, so short
++    cycles replay graphs sized to them instead of padding to the full buffer."""
++
+     save_activations: bool = True
+     """Whether to actually accumulate FT activations into the shared buffers.
+     Set False to measure the activation-save overhead: FT samples are still
+@@ -476,15 +518,22 @@ class FinetuneConfig:
+             or (enable and total > fwd_token_throttle)   # new rule
+         )
+ 
+-    where ``total = prefill + ft + len(decode_kv)`` — the same value
+-    the engine's ``[batch …] (total=N)`` log line shows for each
+-    step. Resume happens for free as soon as both conditions go
++    where ``total = inference_prefill + len(decode_kv)``. FT tokens
++    are excluded, so a pure FT forward does not activate the throttle.
++    Resume happens for free as soon as both conditions go
+     False (no prefill AND total at-or-below the threshold), so a
+     transient burst un-pauses backward within microseconds of the
+     next step that drops back under the bound. Ignored when
+     ``fwd_token_throttle_enable`` is False; the field is still read
+     so the value can sit in a YAML and be flipped on/off via the
+-    bool without editing the number."""
++    bool without editing the number. Zero protects every nonempty
++    inference batch, including a single decode token. Negative values
++    disable this pause source."""
++
++    def should_throttle_backward(self, inference_tokens: int) -> bool:
++        """Shared engage/release predicate; zero is a valid token threshold."""
++        return (self.fwd_token_throttle_enable
++                and 0 <= self.fwd_token_throttle < inference_tokens)
+ 
+     # --- rps-throttle (closes FT admission under bursts) ---
+     rps_throttle_enable: bool = False
+diff --git a/dserve-vllm/vllm/deltaserve/backward_process.py b/dserve-vllm/vllm/deltaserve/backward_process.py
+index 118b71a..99f8495 100644
+--- a/dserve-vllm/vllm/deltaserve/backward_process.py
++++ b/dserve-vllm/vllm/deltaserve/backward_process.py
+@@ -330,7 +330,8 @@ class BackwardProcess:
+ 
+     def notify_buffer_full(self, n: int, sleep_s: float = 2.0,
+                            sample_lens: list[int] | None = None,
+-                           epoch: int = 0) -> None:
++                           epoch: int = 0,
++                           loss_spans: list | None = None) -> None:
+         """Signal the child that the activation buffer is full (ASYNC, no wait).
+ 
+         The child computes the loss + logit gradient over the captured rows,
+@@ -349,6 +350,8 @@ class BackwardProcess:
+                 "cmd": "process_activations", "n": int(n),
+                 "sleep_s": float(sleep_s),
+                 "sample_lens": list(sample_lens or []), "epoch": int(epoch),
++                # [chat SFT] per-sample target spans (None → loss on every token)
++                "loss_spans": loss_spans,
+             })
+         except (BrokenPipeError, OSError, EOFError, ValueError) as e:
+             dprint(f"[backward] notify_buffer_full skipped (child gone): {e}")
+diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/base.py b/dserve-vllm/vllm/deltaserve/bwd_services/base.py
+index f499c52..fe525b7 100644
+--- a/dserve-vllm/vllm/deltaserve/bwd_services/base.py
++++ b/dserve-vllm/vllm/deltaserve/bwd_services/base.py
+@@ -218,7 +218,7 @@ class BackwardService:
+         raise NotImplementedError
+ 
+     def process_backward(self, activations: dict, sample_lens: list[int],
+-                         n: int, epoch: int):
++                         n: int, epoch: int, loss_spans: list | None = None):
+         """One backward cycle. Default = loss-only (no optimizer): compute the loss
+         + logit gradient and stash the latter. Trainer subclasses (llama3) override
+         to run the full manual LoRA backward + optimizer/scheduler step. Returns
+@@ -227,6 +227,10 @@ class BackwardService:
+         self.last_logit_grad = grad
+         return loss, n_valid
+ 
++    def after_cycle(self) -> None:
++        """Hook run after each successful cycle, once the trained-token counters
++        are updated (trainers export the final adapter here). No-op by default."""
++
+     def verify_activations(self, activations: dict, n: int) -> None:
+         """Optional per-model check that the captured activations are correct.
+         Default no-op; subclasses log assertions (gated on the debug flag)."""
+@@ -412,6 +416,7 @@ class BackwardService:
+         sleep_s = float(msg.get("sleep_s", 2.0))
+         sample_lens = msg.get("sample_lens") or []
+         epoch = int(msg.get("epoch", 0))
++        loss_spans = msg.get("loss_spans")   # [chat SFT] None → every token
+         # Announce the start of a backward cycle. Reports the per-cycle
+         # token count + sample count + epoch, plus the current pause-
+         # gate state (``gpu_grant`` SET = bwd can run; CLEAR = paused,
+@@ -468,12 +473,14 @@ class BackwardService:
+                     end_evt = torch.cuda.Event(enable_timing=True)
+                     start_evt.record()
+                     loss, n_valid = self.process_backward(
+-                        self.activations, sample_lens, n, epoch)
++                        self.activations, sample_lens, n, epoch,
++                        loss_spans=loss_spans)
+                     end_evt.record()
+                 else:
+                     t0 = time.perf_counter()
+                     loss, n_valid = self.process_backward(
+-                        self.activations, sample_lens, n, epoch)
++                        self.activations, sample_lens, n, epoch,
++                        loss_spans=loss_spans)
+                     cpu_elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                 # FT throughput metric: total FT token-rows PROCESSED (raw
+                 # ``n`` = sum of this cycle's sample lengths), NOT the CE-valid
+@@ -484,6 +491,7 @@ class BackwardService:
+                 # ``n`` is the raw batch-row count (sum of seq_lens in this
+                 # cycle), which matches the units of total_tokens_in_memory.
+                 self._epoch_processed_tokens += int(n)
++                self.after_cycle()
+             except Exception as e:  # noqa: BLE001 — keep the cycle alive on error
+                 import traceback
+                 dprint(f"[backward] backward failed: {e}")
+diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py
+index a87a2c1..30b9fef 100644
+--- a/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py
++++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py
+@@ -10,12 +10,31 @@ back to these when a batch overflows the padded bounds. Scores/softmax and
+ the dQ/dK/dV products always run in fp32 (the load-bearing GQA precision rule;
+ downgrading them plateaued Llama-3 loss in DeltaServe). ``dims`` is
+ ``(Hq, Hkv, Hd, kv_size)``.
++
++Long samples (the ``[Hq, L, L]`` fp32 scores would exceed ``SCORES_BYTES``)
++take a query-chunked path: each block of query rows sees only the keys it can
++attend to (``0 .. block_end``), so every intermediate is ``[Hq, C, block_end]``
++instead of ``[Hq, L, L]``. The dropped keys are exactly the masked ones, so the
++math is the dense math; only the GEMM/reduction tiling differs. Short samples
++keep the dense path unchanged.
+ """
+ 
+ import math
++import os
+ 
+ import torch
+ 
++# Per-intermediate fp32 budget for one sample's scores-shaped tensors. Above it
++# the cores chunk over query rows (512 MB → C=512 rows at Hq=16, L=16K).
++SCORES_BYTES = int(os.environ.get("DSERVE_ATTN_SCORES_BYTES", 512 << 20))
++
++
++def _q_chunk(hq: int, ln: int) -> int:
++    """Query rows per chunk for a sample of length ``ln``; ``ln`` = dense."""
++    if hq * ln * ln * 4 <= SCORES_BYTES:
++        return ln
++    return max(16, SCORES_BYTES // (hq * ln * 4))
++
+ 
+ def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
+     """Causal GQA attention over the packed batch. ``qh`` [n, Hq, Hd],
+@@ -35,6 +54,12 @@ def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
+             v_rep = v_blk.repeat_interleave(kv_repeat, 0)
+         else:
+             k_rep, v_rep = k_blk, v_blk
++        C = _q_chunk(Hq, ln)
++        if C < ln:
++            ctx_blocks.append(_attn_forward_chunked(
++                q_blk.float(), k_rep.float(), v_rep.float(), scale, C,
++                out_dtype))
++            continue
+         scores = (q_blk.float() @ k_rep.float().transpose(-1, -2)) * scale
+         mask = torch.triu(
+             torch.ones(ln, ln, dtype=torch.bool, device=qh.device), 1)
+@@ -45,6 +70,52 @@ def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
+     return torch.cat(ctx_blocks, 0).reshape(n, Hq * Hd)
+ 
+ 
++def _causal_mask(qs: int, qe: int, kend: int, device) -> torch.Tensor:
++    """True where key ``j`` is in the future of query ``qs + r`` (rows qs..qe)."""
++    return torch.ones(qe - qs, kend, dtype=torch.bool, device=device).triu(qs + 1)
++
++
++def _attn_forward_chunked(q, k, v, scale, C, out_dtype):
++    """Query-chunked causal attention for one sample. ``q``/``k``/``v``
++    ``[Hq, L, Hd]`` fp32 (k/v already GQA-repeated). Returns ``[L, Hq, Hd]``."""
++    ln = q.shape[1]
++    ctx = q.new_empty((ln, q.shape[0], q.shape[2]), dtype=out_dtype)
++    for qs in range(0, ln, C):
++        qe = min(qs + C, ln)
++        scores = (q[:, qs:qe] @ k[:, :qe].transpose(-1, -2)) * scale
++        scores.masked_fill_(_causal_mask(qs, qe, qe, q.device), -1e9)
++        att = torch.softmax(scores, dim=-1)        # [Hq, c, qe] fp32
++        ctx[qs:qe] = (att @ v[:, :qe]).to(out_dtype).transpose(0, 1)
++    return ctx
++
++
++def _attn_backward_chunked(q, k, v, g, scale, C):
++    """Query-chunked attention backward for one sample. ``q``/``k``/``v``/``g``
++    ``[Hq, L, Hd]`` fp32 (k/v GQA-repeated). Each query block recomputes its
++    softmax rows over keys ``0 .. block_end`` and adds its dK/dV contribution
++    to those keys. Returns ``(gq, gk, gv)``, each ``[Hq, L, Hd]`` fp32."""
++    ln = q.shape[1]
++    gq = torch.empty_like(q)
++    gk = torch.zeros_like(k)
++    gv = torch.zeros_like(v)
++    for qs in range(0, ln, C):
++        qe = min(qs + C, ln)
++        q_c, k_c, v_c, g_c = q[:, qs:qe], k[:, :qe], v[:, :qe], g[:, qs:qe]
++        mask = _causal_mask(qs, qe, qe, q.device)
++        scores = (q_c @ k_c.transpose(-1, -2)) * scale
++        scores.masked_fill_(mask, -1e9)
++        att = torch.softmax(scores, dim=-1)        # [Hq, c, qe] fp32
++        del scores
++        grad_att = g_c @ v_c.transpose(-1, -2)
++        gv[:, :qe] += att.transpose(-1, -2) @ g_c
++        sm = (grad_att * att).sum(-1, keepdim=True)
++        grad_scores = (att * (grad_att - sm)).masked_fill_(mask, 0.0)
++        del att, grad_att
++        gq[:, qs:qe] = (grad_scores @ k_c) * scale
++        gk[:, :qe] += (grad_scores.transpose(-1, -2) @ q_c) * scale
++    return gq, gk, gv
++
++
+ def attn_backward_core(qh, kh, vh, grad_ctx, seq_lens, b_start, dims, cdt=torch.float32,
+                        *, grad_qh_buf=None, grad_kh_buf=None, grad_vh_buf=None):
+     """Per-sample GQA attention backward (eager). Returns (grad_qh, grad_kh,
+@@ -90,17 +161,23 @@ def attn_backward_core(qh, kh, vh, grad_ctx, seq_lens, b_start, dims, cdt=torch.
+             v_rep = v_blk.repeat_interleave(kv_repeat, 0)
+         else:
+             k_rep, v_rep = k_blk, v_blk
+-        mask = torch.triu(torch.ones(ln, ln, dtype=torch.bool, device=device), 1)
+-        scores = (q_blk @ k_rep.transpose(-1, -2)) * scale   # fp32
+-        scores = scores.masked_fill(mask, -1e9)
+-        att = torch.softmax(scores, dim=-1)          # [Hq, L, L] fp32
+         g = grad_ctx[st:st + ln].transpose(0, 1).float()     # fp32
+-        grad_att = g @ v_rep.transpose(-1, -2)       # [Hq, L, L]
+-        grad_v_rep = att.transpose(-1, -2) @ g       # [Hq, L, Hd]
+-        sm = (grad_att * att).sum(-1, keepdim=True)
+-        grad_scores = (att * (grad_att - sm)).masked_fill(mask, 0.0)
+-        grad_q_blk = (grad_scores @ k_rep) * scale
+-        grad_k_rep = (grad_scores.transpose(-1, -2) @ q_blk) * scale
++        C = _q_chunk(Hq, ln)
++        if C < ln:
++            grad_q_blk, grad_k_rep, grad_v_rep = _attn_backward_chunked(
++                q_blk, k_rep, v_rep, g, scale, C)
++        else:
++            mask = torch.triu(
++                torch.ones(ln, ln, dtype=torch.bool, device=device), 1)
++            scores = (q_blk @ k_rep.transpose(-1, -2)) * scale   # fp32
++            scores = scores.masked_fill(mask, -1e9)
++            att = torch.softmax(scores, dim=-1)          # [Hq, L, L] fp32
++            grad_att = g @ v_rep.transpose(-1, -2)       # [Hq, L, L]
++            grad_v_rep = att.transpose(-1, -2) @ g       # [Hq, L, Hd]
++            sm = (grad_att * att).sum(-1, keepdim=True)
++            grad_scores = (att * (grad_att - sm)).masked_fill(mask, 0.0)
++            grad_q_blk = (grad_scores @ k_rep) * scale
++            grad_k_rep = (grad_scores.transpose(-1, -2) @ q_blk) * scale
+         if kv_repeat != 1:
+             grad_k_kv = grad_k_rep.view(Hkv, kv_repeat, ln, Hd).sum(1)
+             grad_v_kv = grad_v_rep.view(Hkv, kv_repeat, ln, Hd).sum(1)
+diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/graph.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/graph.py
+index b30c6f6..e43ad1d 100644
+--- a/dserve-vllm/vllm/deltaserve/bwd_services/common/graph.py
++++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/graph.py
+@@ -407,7 +407,8 @@ class GraphedBackward:
+                 pos_cpu.extend(range(want))
+             pos_cpu.extend([0] * (self.s_max - len(pos_cpu)))
+             pos_t = torch.tensor(pos_cpu, dtype=torch.long, device=self.device)
+-            cos, sin = rope_cos_sin(pos_t, self.Hd, float(self.svc.theta))
++            cos, sin = rope_cos_sin(pos_t, self.Hd, float(self.svc.theta),
++                                    getattr(self.svc, "rope_scaling", None))
+             self.static_cos.copy_(cos)
+             self.static_sin.copy_(sin)
+         else:
+diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/head.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/head.py
+index 05ec953..d2673d5 100644
+--- a/dserve-vllm/vllm/deltaserve/bwd_services/common/head.py
++++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/head.py
+@@ -20,12 +20,18 @@ of a ~165 ms uncontended cycle (profiled 2026-09-08). The head is frozen;
+ only ``grad_final_in`` flows back into the layer stack.
+ """
+ 
++import os
++
+ import torch
+ import torch.nn.functional as F
+ 
+ from vllm.deltaserve.bwd_services.common.ops import rmsnorm, rmsnorm_backward
+ 
+ VOCAB_CHUNK = 16384
++# Above this many bytes of fp32 logits ([n_valid, vocab]) the head streams:
++# an online logsumexp over vocab chunks instead of materializing the logits
++# (16K rows x 152K vocab would be ~10 GB, twice over for the softmax).
++LOGITS_BYTES = int(os.environ.get("DSERVE_HEAD_LOGITS_BYTES", 2 << 30))
+ 
+ 
+ def logits_chunked(h: torch.Tensor, lm_w: torch.Tensor, vocab: int):
+@@ -40,7 +46,7 @@ def logits_chunked(h: torch.Tensor, lm_w: torch.Tensor, vocab: int):
+ 
+ 
+ def head_backward(final_in, lm_w, norm_w, eps, ids, seq_lens, b_start, vocab,
+-                  pause_fn=None):
++                  pause_fn=None, loss_spans=None):
+     """LM-head + final-norm: per-sample shift CE loss + grad w.r.t. final_in.
+     Returns (loss: float, n_valid: int, grad_final_in [n,D] fp32).
+ 
+@@ -53,24 +59,45 @@ def head_backward(final_in, lm_w, norm_w, eps, ids, seq_lens, b_start, vocab,
+     samples with ``ln < 2`` contribute nothing. The loss is the SUM of the
+     per-row cross-entropies divided by ``n_valid`` (the number of predicting
+     rows), and the gradient is ``(softmax - onehot) / n_valid`` — identical to
+-    the original per-sample loop, computed for all rows at once."""
++    the original per-sample loop, computed for all rows at once.
++
++    ``loss_spans`` (chat SFT): per sample, None or a list of target spans
++    ``(s, e)`` relative to the sample start — only the rows predicting a token
++    at positions ``s .. e-1`` carry loss (the row at ``j - 1`` predicts ``j``),
++    and ``n_valid`` counts those rows. None for the whole call = every row
++    (the original behaviour)."""
+     # rmsnorm computes in fp32 but returns the input dtype (bf16 in prod);
+     # the head contract is fp32 end to end, so upcast the rows once here.
+     normed = rmsnorm(final_in, norm_w, eps)
+     n, D = final_in.shape
+     device = final_in.device
+     rows, tgts = [], []
+-    for st, ln in zip(b_start, seq_lens):
++    for k, (st, ln) in enumerate(zip(b_start, seq_lens)):
+         if ln < 2:
+             continue
+-        rows.append(torch.arange(st, st + ln - 1, device=device))
+-        tgts.append(ids[st + 1:st + ln].long())
++        spans = loss_spans[k] if loss_spans is not None else None
++        if spans is None:
++            rows.append(torch.arange(st, st + ln - 1, device=device))
++            tgts.append(ids[st + 1:st + ln].long())
++            continue
++        for s, e in spans:
++            s, e = max(int(s), 1), min(int(e), ln)    # position 0 has no predictor
++            if e <= s:
++                continue
++            rows.append(torch.arange(st + s - 1, st + e - 1, device=device))
++            tgts.append(ids[st + s:st + e].long())
+     n_valid = sum(int(r.numel()) for r in rows)
+     if n_valid == 0:
+         return 0.0, 0, final_in.new_zeros((n, D), dtype=torch.float32)
+     rows = torch.cat(rows)
+     tgt = torch.cat(tgts)
+     h = normed[rows].float()                          # [m, D] fp32, m = n_valid
++    if n_valid * vocab * 4 > LOGITS_BYTES:
++        loss_sum, grad_rows = _head_streaming(h, tgt, lm_w, vocab, pause_fn)
++        grad_normed = grad_rows.new_zeros((n, D))
++        grad_normed[rows] = grad_rows
++        grad_final_in = rmsnorm_backward(final_in, grad_normed, norm_w, eps)
++        return float(loss_sum / n_valid), n_valid, grad_final_in
+ 
+     # Pass 1: fp32 logits for every predicting row, one GEMM per vocab chunk
+     # (the bf16 head chunk converted once here).
+@@ -98,3 +125,46 @@ def head_backward(final_in, lm_w, norm_w, eps, ids, seq_lens, b_start, vocab,
+     grad_normed[rows] = grad_rows
+     grad_final_in = rmsnorm_backward(final_in, grad_normed, norm_w, eps)
+     return float(total_loss.item() / n_valid), n_valid, grad_final_in
++
++
++def _head_streaming(h, tgt, lm_w, vocab, pause_fn=None):
++    """Same loss and gradient as the dense path without the ``[m, vocab]``
++    logits: pass 1 keeps a running max / sum-exp per row (online logsumexp)
++    and picks out each row's target logit; pass 2 recomputes each vocab
++    chunk's logits and accumulates ``(softmax - onehot) / m @ W``. Each head
++    chunk is converted to fp32 once per pass, as in the dense path; the
++    logits GEMM runs twice. Returns ``(loss_sum: float, grad_rows [m, D])``."""
++    m = h.shape[0]
++    run_max = h.new_full((m,), float("-inf"))
++    run_sum = h.new_zeros((m,))
++    tgt_logit = h.new_zeros((m,))
++    for c in range(0, vocab, VOCAB_CHUNK):
++        if pause_fn is not None:
++            pause_fn()
++        e = min(c + VOCAB_CHUNK, vocab)
++        logits = h @ lm_w[c:e].float().t()            # [m, Vc] fp32
++        new_max = torch.maximum(run_max, logits.max(dim=-1).values)
++        run_sum = (run_sum * torch.exp(run_max - new_max)
++                   + torch.exp(logits - new_max[:, None]).sum(dim=-1))
++        run_max = new_max
++        sel = (tgt >= c) & (tgt < e)
++        idx = sel.nonzero(as_tuple=True)[0]
++        tgt_logit[idx] = logits[idx, tgt[idx] - c]
++        del logits
++    lse = run_max + torch.log(run_sum)                # [m]
++    loss_sum = float((lse - tgt_logit).sum().item())
++
++    grad_rows = h.new_zeros(h.shape)
++    for c in range(0, vocab, VOCAB_CHUNK):
++        if pause_fn is not None:
++            pause_fn()
++        e = min(c + VOCAB_CHUNK, vocab)
++        w = lm_w[c:e].float()
++        p = torch.exp(h @ w.t() - lse[:, None])       # softmax chunk [m, Vc]
++        sel = (tgt >= c) & (tgt < e)
++        idx = sel.nonzero(as_tuple=True)[0]
++        p[idx, tgt[idx] - c] -= 1.0
++        p /= m
++        grad_rows += p @ w
++        del p, w
++    return loss_sum, grad_rows
+diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/ops.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/ops.py
+index dcaaece..3dbbb26 100644
+--- a/dserve-vllm/vllm/deltaserve/bwd_services/common/ops.py
++++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/ops.py
+@@ -15,13 +15,45 @@ import torch
+ import torch.nn.functional as F
+ 
+ 
+-def rope_cos_sin(positions: torch.Tensor, head_dim: int, theta: float):
+-    """NeoX cos/sin for the given positions. Returns (cos, sin) [n, head_dim//2] fp32."""
+-    inv_freq = 1.0 / (theta ** (
+-        torch.arange(0, head_dim, 2, dtype=torch.float32, device=positions.device)
+-        / head_dim))
++def rope_cos_sin(positions: torch.Tensor, head_dim: int, theta: float,
++                 scaling: dict | None = None):
++    """NeoX cos/sin for the given positions. Returns (cos, sin) [n, head_dim//2] fp32.
++
++    ``scaling`` (from ``ft_meta.rope_scaling_of``) = None for plain RoPE, or a
++    YaRN dict: the frequencies and the ``mscale`` factor on cos/sin are those
++    of vLLM's ``YaRNScalingRotaryEmbedding`` (its own helpers are reused). The
++    rotation stays linear in (cos, sin), so ``apply_rope`` / ``rope_backward``
++    need no change."""
++    if scaling is None:
++        inv_freq = 1.0 / (theta ** (
++            torch.arange(0, head_dim, 2, dtype=torch.float32, device=positions.device)
++            / head_dim))
++        mscale = 1.0
++    else:
++        inv_freq, mscale = _yarn_inv_freq(head_dim, theta, scaling)
++        inv_freq = inv_freq.to(positions.device)
+     freqs = torch.outer(positions.float(), inv_freq)   # [n, head_dim//2]
+-    return freqs.cos(), freqs.sin()
++    if mscale == 1.0:
++        return freqs.cos(), freqs.sin()
++    return freqs.cos() * mscale, freqs.sin() * mscale
++
++
++def _yarn_inv_freq(head_dim: int, theta: float, sc: dict):
++    """(inv_freq [head_dim//2] fp32, mscale) of vLLM's YaRN rotary embedding."""
++    from vllm.model_executor.layers.rotary_embedding.common import (
++        yarn_find_correction_range, yarn_get_mscale, yarn_linear_ramp_mask)
++    factor = float(sc["factor"])
++    pos_freqs = theta ** (torch.arange(0, head_dim, 2, dtype=torch.float) / head_dim)
++    low, high = yarn_find_correction_range(
++        sc.get("beta_fast", 32), sc.get("beta_slow", 1), head_dim, theta,
++        sc["original_max_position_embeddings"], sc.get("truncate", True))
++    mask = (1 - yarn_linear_ramp_mask(low, high, head_dim // 2, dtype=torch.float)
++            ) * sc.get("extrapolation_factor", 1)
++    inv_freq = (1.0 / (factor * pos_freqs)) * (1 - mask) + (1.0 / pos_freqs) * mask
++    attn = sc.get("attn_factor", 1)
++    mscale = (float(yarn_get_mscale(factor) * attn)
++              if sc.get("apply_yarn_scaling", True) else float(attn))
++    return inv_freq, mscale
+ 
+ 
+ def apply_rope(xh: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/tp.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/tp.py
+index 0874c4f..2a52fff 100644
+--- a/dserve-vllm/vllm/deltaserve/bwd_services/common/tp.py
++++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/tp.py
+@@ -187,22 +187,30 @@ class FactorBucket:
+     """One persistent flat buffer holding every layer's REPLICATED LoRA-factor
+     gradients (``qA``/``kA``/``vA``/``oB``), laid out in backward order
+     (layer L-1 first) so the layers of one group are one contiguous slice.
+-    The trainer copies each layer's four grads into its slab as they are
++    Only factors present in the adapter are included (e.g. QKV-only LoRA).
++    The trainer copies each layer's replicated grads into its slab as they are
+     produced, submits a group's slice to the ``CommQueue`` once its last layer
+     is done, and reads the reduced grads back after ``wait``. Allocated once,
+     outside any CUDA-graph pool; rewritten only in the next cycle."""
+ 
+     def __init__(self, lora: dict, n_layers: int, dtype, device,
+                  group_layers: int = BUCKET_LAYERS) -> None:
+-        self.order = [i for i in reversed(range(n_layers)) if i in lora]
++        self.order = []
+         self.group_layers = max(1, int(group_layers))
+         offsets: dict = {}
++        layer_spans: dict = {}
+         total = 0
+-        for i in self.order:
++        for i in reversed(range(n_layers)):
++            start = total
+             for key in REPLICATED_FACTORS:
+-                p = lora[i][key[0]][key[1]]
++                p = lora.get(i, {}).get(key[0], {}).get(key[1])
++                if p is None:
++                    continue
+                 offsets[(i, key)] = (total, tuple(p.shape))
+                 total += p.numel()
++            if total > start:
++                self.order.append(i)
++                layer_spans[i] = (start, total)
+         self.flat = torch.zeros(max(total, 1), dtype=dtype, device=device)
+         self._views = {k: self.flat[o:o + _numel(shape)].view(shape)
+                        for k, (o, shape) in offsets.items()}
+@@ -211,9 +219,9 @@ class FactorBucket:
+         self.groups: list[tuple[int, int, int]] = []   # (last_layer, start, end)
+         for g0 in range(0, len(self.order), self.group_layers):
+             layers = self.order[g0:g0 + self.group_layers]
+-            start = offsets[(layers[0], REPLICATED_FACTORS[0])][0]
+-            o_last, shape_last = offsets[(layers[-1], REPLICATED_FACTORS[-1])]
+-            self.groups.append((layers[-1], start, o_last + _numel(shape_last)))
++            start = layer_spans[layers[0]][0]
++            end = layer_spans[layers[-1]][1]
++            self.groups.append((layers[-1], start, end))
+         self._submit_after = {last: (s, e) for last, s, e in self.groups}
+ 
+     @property
+@@ -224,11 +232,16 @@ class FactorBucket:
+         return self._views[(layer, key)]
+ 
+     def stash(self, layer: int, grads: dict) -> None:
+-        """Copy this layer's four replicated factor grads into their slabs."""
++        """Copy this layer's available replicated factor grads into their slabs."""
+         for key in REPLICATED_FACTORS:
++            view = self._views.get((layer, key))
++            if view is None:
++                continue
+             g = grads.get(key)
+             if g is not None:
+-                self._views[(layer, key)].copy_(g)
++                view.copy_(g)
++            else:
++                view.zero_()
+ 
+     def group_done(self, layer: int) -> torch.Tensor | None:
+         """The flat slice to reduce if ``layer`` closes a group, else None."""
+diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py
+index c875eaf..4704692 100644
+--- a/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py
++++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py
+@@ -139,6 +139,7 @@ class LoraSftTrainerService(BackwardService):
+         self.q_size = self.Hq * self.Hd            # local
+         self.inter = inter_full // self.tp_size    # local
+         self.theta = float(meta["rope_theta"])
++        self.rope_scaling = meta.get("rope_scaling")     # None | YaRN dict
+         self.eps = float(meta["rms_norm_eps"])
+         self.scaling = float(meta.get("lora_scaling", 1.0))
+         self.vocab = int(meta["vocab_size"])
+@@ -215,6 +216,13 @@ class LoraSftTrainerService(BackwardService):
+         # shard is a single contiguous slice at offset tp_rank * local_width.
+         # tp_size=1 → lora_shard_slice is identity → single-GPU masters unchanged.
+         params: list[nn.Parameter] = []
++        self._lora_keys: dict = {}
++        self._save_dir = meta.get("adapter_save_dir")
++        self._save_every = int(meta.get("adapter_save_every", 0) or 0)
++        self._src_adapter = meta.get("finetuning_lora_path")
++        self._cycles = 0
++        self._num_epochs = int(meta.get("num_epochs", 0) or 0)
++        self._final_saved = False
+         for key, t in ft.items():
+             m = _LORA_KEY_RE.search(key)
+             if m is None:
+@@ -225,6 +233,7 @@ class LoraSftTrainerService(BackwardService):
+             # fp32 master, contiguous so the fused AdamW + IPC publish are happy.
+             param = nn.Parameter(shard.detach().clone().float().contiguous())
+             self.lora.setdefault(layer, {}).setdefault(proj, {})[ab] = param
++            self._lora_keys[(layer, proj, ab)] = key   # PEFT name, for export
+             params.append(param)
+ 
+         # ``fused=True`` uses PyTorch's CUDA-fused AdamW kernel — one launch
+@@ -294,6 +303,11 @@ class LoraSftTrainerService(BackwardService):
+                    "keeping eager")
+             return
+         s_max = int(meta.get("max_saved_finetuning_tokens", 0))
++        # [long context] capture the graphs at a smaller row count than the
++        # buffer; process_backward runs bigger backwards eager.
++        g_max = int(meta.get("backward_cuda_graph_max_tokens", 0))
++        if 0 < g_max < s_max:
++            s_max = g_max
+         bn_max = int(meta.get("backward_cuda_graph_attn_bn_max", 8))
+         l_max = int(meta.get("backward_cuda_graph_attn_l_max", 64))
+         if s_max <= 0:
+@@ -361,13 +375,19 @@ class LoraSftTrainerService(BackwardService):
+ 
+     # -- the real backward (overrides base.process_backward) ------------------
+ 
+-    def process_backward(self, activations, sample_lens, n, epoch):
++    def process_backward(self, activations, sample_lens, n, epoch,
++                         loss_spans=None):
+         self._maybe_pause()
+         if not self._built:
+             raise RuntimeError(
+                 f"{self.family.name} backward state not built (weights not shared)")
++        # [long context] a backward with more rows than the graphs were captured
++        # at runs the whole cycle eager.
++        runner = self.graph_runner
++        if runner is not None and n > runner.s_max:
++            runner = None
+         # Mode tag for the one-line cycle log (set in BackwardService dispatcher).
+-        self._last_mode = "graph" if self.graph_runner is not None else "eager"
++        self._last_mode = "graph" if runner is not None else "eager"
+         seq_lens = [int(s) for s in sample_lens]
+         b_start, acc = [], 0
+         for s in seq_lens:
+@@ -377,7 +397,7 @@ class LoraSftTrainerService(BackwardService):
+         positions = torch.cat([
+             torch.arange(s, device=device) for s in seq_lens]) if seq_lens else \
+             torch.zeros(0, device=device)
+-        cos, sin = rope_cos_sin(positions, self.Hd, self.theta)
++        cos, sin = rope_cos_sin(positions, self.Hd, self.theta, self.rope_scaling)
+         ids = activations["concat_input_ids"][:n]
+         if os.environ.get("DSERVE_TP_DIAG") and self._diag_count < 5:
+             self._diag_count += 1
+@@ -389,7 +409,8 @@ class LoraSftTrainerService(BackwardService):
+         # Head: loss + grad w.r.t. final_in (pre-final-norm residual = layer_in[L]).
+         loss, n_valid, g = head_backward(
+             activations["final_in"][:n], self.lm_w, self.norm_w, self.eps,
+-            ids, seq_lens, b_start, self.vocab, pause_fn=self._maybe_pause)
++            ids, seq_lens, b_start, self.vocab, pause_fn=self._maybe_pause,
++            loss_spans=loss_spans)
+ 
+         # Saved MLP pre-activations (gate||up) per layer, if captured in the forward
+         # — lets the remat skip the gate_up matmul (the layer's biggest recompute).
+@@ -415,7 +436,6 @@ class LoraSftTrainerService(BackwardService):
+         # If the graphed runner is attached, build per-backward scatter indices
+         # + key-pad mask once (re-used across all L layers' padded-attention
+         # replays). Eager fallback for batches that overflow the padded budget.
+-        runner = self.graph_runner
+         if runner is not None:
+             runner.begin_backward(n, seq_lens, b_start)
+ 
+@@ -535,10 +555,81 @@ class LoraSftTrainerService(BackwardService):
+         # tensors inference reads). Safe with no locking: FT admission is closed for
+         # the whole backward, so the adapter is idle until the done-reply reopens it.
+         self._publish_to_served()
++        self._cycles += 1
++        if self._save_dir and self._save_every > 0 \
++                and self._cycles % self._save_every == 0:
++            self.export_adapter(os.path.join(self._save_dir, f"cycle{self._cycles}"))
+ 
+         return loss, n_valid
+ 
+     @torch.no_grad()
++    def after_cycle(self) -> None:
++        """Export ``<save_dir>/final`` once ``num_epochs`` epochs of the corpus
++        are trained. The counters advance identically on every TP rank (same
++        ``n`` per cycle, corpus total relayed to every child), so all ranks
++        reach the export — a collective under TP — on the same cycle."""
++        if (self._save_dir and not self._final_saved and self._num_epochs > 0
++                and self._total_tokens_per_epoch > 0
++                and self._total_tokens_trained
++                >= self._num_epochs * self._total_tokens_per_epoch):
++            self._final_saved = True
++            self.export_adapter(os.path.join(self._save_dir, "final"))
++
++    def export_adapter(self, out_dir: str) -> None:
++        """Write the current fp32 masters as a PEFT adapter directory (the
++        un-scaled A/B — PEFT applies alpha/r itself) and refresh
++        ``<save_dir>/latest``. Under TP every rank must call this on the same
++        cycle (it does: process_backward runs in lock-step): the shards are
++        gathered over the backward children's gloo group, then rank 0 merges
++        — q/k/v B are output-row shards (dim 0), o A input-col shards (dim 1),
++        every other factor is replicated — and writes."""
++        import json
++        import shutil
++
++        import torch.distributed as dist
++        from safetensors.torch import save_file
++
++        from vllm.deltaserve.bwd_services.common.tp import backward_cpu_group
++
++        local = {k: self.lora[k[0]][k[1]][k[2]].detach().float().cpu()
++                 for k in self._lora_keys}
++        if self.tp_size > 1:
++            shards = [None] * self.tp_size
++            dist.all_gather_object(shards, local, group=backward_cpu_group())
++            if self.tp_rank != 0:
++                return
++            merged = {}
++            for k in local:
++                _, proj, ab = k
++                if (ab == "B" and proj in ("q", "k", "v")) or (ab == "A" and proj == "o"):
++                    merged[k] = torch.cat([sh[k] for sh in shards],
++                                          dim=0 if ab == "B" else 1)
++                else:
++                    merged[k] = shards[0][k]
++        else:
++            merged = local
++        tmp = out_dir + ".tmp"
++        os.makedirs(tmp, exist_ok=True)
++        save_file({self._lora_keys[k]: v.contiguous() for k, v in merged.items()},
++                  os.path.join(tmp, "adapter_model.safetensors"))
++        cfg_src = os.path.join(self._src_adapter or "", "adapter_config.json")
++        if os.path.exists(cfg_src):
++            cfg = json.load(open(cfg_src))
++        else:
++            cfg = {"peft_type": "LORA", "task_type": "CAUSAL_LM",
++                   "r": int(next(iter(merged.values())).shape[0])}
++        cfg["inference_mode"] = True
++        with open(os.path.join(tmp, "adapter_config.json"), "w") as f:
++            json.dump(cfg, f, indent=2)
++        shutil.rmtree(out_dir, ignore_errors=True)
++        os.replace(tmp, out_dir)
++        latest = os.path.join(os.path.dirname(out_dir), "latest")
++        shutil.rmtree(latest + ".tmp", ignore_errors=True)
++        shutil.copytree(out_dir, latest + ".tmp")
++        shutil.rmtree(latest, ignore_errors=True)
++        os.replace(latest + ".tmp", latest)
++        dprint(f"[backward] exported FT adapter (cycle {self._cycles}) -> {out_dir}")
++
+     def _publish_to_served(self) -> None:
+         """Write the trained fp32 master into vLLM's served LoRA stacked buffers
+         (DeltaServe's load-time refresh): per (layer, proj), clamp + cast to the
+diff --git a/dserve-vllm/vllm/deltaserve/coordinator.py b/dserve-vllm/vllm/deltaserve/coordinator.py
+index ca6b900..f739da4 100644
+--- a/dserve-vllm/vllm/deltaserve/coordinator.py
++++ b/dserve-vllm/vllm/deltaserve/coordinator.py
+@@ -263,6 +263,13 @@ class FTAborted(Exception):
+ _COORDINATOR: "FinetuneCoordinator | None" = None
+ 
+ 
++def batch_tokens_of(ft_cfg, capacity: int) -> int:
++    """``finetune.backward_batch_tokens`` resolved against the buffer capacity
++    (0 or anything >= capacity → capacity, i.e. the original behaviour)."""
++    b = int(getattr(ft_cfg, "backward_batch_tokens", 0) or 0)
++    return b if 0 < b < int(capacity) else int(capacity)
++
++
+ def get_coordinator(capacity: int | None = None,
+                     per_step_budget: int | None = None) -> "FinetuneCoordinator | None":
+     """Process-wide singleton. First call (from the scheduler) creates it."""
+@@ -278,6 +285,9 @@ class FinetuneCoordinator:
+         self.per_step_budget = int(
+             per_step_budget if per_step_budget is not None else capacity
+         )
++        # [long context] backward batch size in tokens (finetune.
++        # backward_batch_tokens); == capacity keeps the original behaviour.
++        self.batch_tokens = self.capacity
+         # COMMITTED FT rows — activations actually saved into the buffer
+         # (incremented post-forward in record_capture).
+         self.fill_count = 0
+@@ -293,6 +303,13 @@ class FinetuneCoordinator:
+         # buffer-write order); forwarded to the backward process so it can split
+         # the flat buffers into samples and shift-by-1 for next-token targets.
+         self.sample_lens: list[int] = []
++        # [chat SFT] parallel to ``sample_lens`` (buffer-write order): each
++        # sample's target spans, or None for "every token". Built in
++        # record_capture from the runner's FT request ids via ``_req_spans``
++        # (filled at reserve), so the order is the runner's write order, not
++        # the scheduler's.
++        self.sample_spans: list = []
++        self._req_spans: dict = {}
+         # Parallel to ``sample_lens``: the source FinetuningSample objects in
+         # buffer-write order. Used to call ``store.commit_claimed`` when the
+         # backward acks completion (via ``on_backward_done`` below), so the
+@@ -329,7 +346,7 @@ class FinetuneCoordinator:
+         # coordinator forwards it to its own child ONCE (the child's per-epoch
+         # progress meter printed ``N/?`` forever before this).
+         self.corpus_total_tokens: int = 0
+-        self._corpus_meta_relayed = False
++        self._corpus_meta_relayed = 0   # last corpus total forwarded to the child
+         # [rps_throttle] Sliding-window arrival-rate tracker. Created
+         # eagerly with a 1.0s default window so ``note_arrival`` from
+         # the engine input-queue drain is always safe to call; the
+@@ -340,10 +357,9 @@ class FinetuneCoordinator:
+         # close threshold has been crossed and admission was closed
+         # by the throttle; flipped back to False once RPS drops below
+         # the open threshold and admission is re-opened by the
+-        # throttle. ``admission_open`` is what's actually consulted by
+-        # ``next_ft_budget`` — this flag only exists so the throttle
+-        # knows whether IT was the reason the gate is closed (we don't
+-        # want to spuriously re-open over a buffer-full close).
++        # throttle. next_ft_budget also checks this latch: backward
++        # completion and FT-abort rollback can reopen admission_open
++        # while the arrival-rate throttle is still engaged.
+         self.rps_throttle_active = False
+         # Wall-clock instant (monotonic seconds) at which the throttle
+         # most recently engaged. Used by ``check_rps_throttle`` to
+@@ -465,11 +481,18 @@ class FinetuneCoordinator:
+ 
+     def space_remaining(self) -> int:
+         # Free rows = capacity minus committed AND reserved-in-flight.
+-        return max(0, self.capacity - self.fill_count - self.reserved_fill)
++        used = self.fill_count + self.reserved_fill
++        # [long context] ``batch_tokens`` < capacity: an EMPTY buffer offers the
++        # whole capacity (one long sample), a non-empty one only tops up to
++        # ``batch_tokens`` — so short samples still train in short batches.
++        if used > 0 and 0 < self.batch_tokens < self.capacity:
++            return max(0, self.batch_tokens - used)
++        return max(0, self.capacity - used)
+ 
+     def next_ft_budget(self) -> int:
+         """How many FT tokens the scheduler may admit this step."""
+-        if not self.ft_started or not self.admission_open or self.pending_backward:
++        if (not self.ft_started or not self.admission_open
++                or self.pending_backward or self.rps_throttle_active):
+             return 0
+         return min(self.per_step_budget, self.space_remaining())
+ 
+@@ -490,21 +513,14 @@ class FinetuneCoordinator:
+         longer flaps the gate — useful when bursts are short but
+         you want the FT pause to be sticky for a while.
+ 
+-        Option B (overload ``admission_open``): the throttle uses the
+-        existing admission flag rather than a separate gate, so
+-        ``next_ft_budget`` doesn't need a new AND clause. The
+-        coordinator's other writers of ``admission_open`` (buffer
+-        fill in ``note_injection``, backward start in
+-        ``_trigger_backward``, backward done in ``poll_backward``)
+-        still operate; the throttle interleaves with them under the
+-        single-threaded EngineCore. ``space_remaining()`` /
+-        ``pending_backward`` checks in ``next_ft_budget`` protect
+-        against any spurious "open" the throttle issues over a
+-        buffer-full state.
+-
+-        ``self.rps_throttle_active`` is the throttle's internal
+-        latch so it knows whether to flip on the next transition;
+-        it's not consulted by anything else.
++        The throttle updates ``admission_open`` for existing observers,
++        and ``next_ft_budget`` independently checks its hysteresis latch.
++        Backward completion and FT-abort rollback can restore
++        ``admission_open=True`` during a burst; neither may bypass the
++        RPS gate. Conversely, ``space_remaining()`` / ``pending_backward``
++        checks protect a full buffer when the RPS gate releases.
++
++        ``self.rps_throttle_active`` records whether the throttle is held.
+         ``self.rps_throttle_engaged_at`` is the engage timestamp
+         used to enforce ``close_time``."""
+         if close_rps <= 0:
+@@ -613,7 +629,8 @@ class FinetuneCoordinator:
+         # the scheduler reserves a per-step offset via reserve().)
+         return self.fill_count + self.reserved_fill
+ 
+-    def reserve(self, n: int, samples: list | None = None) -> int:
++    def reserve(self, n: int, samples: list | None = None,
++                req_spans: dict | None = None) -> int:
+         """Reserve n FT rows for a scheduled step and return the buffer write
+         offset they own. Called by the scheduler AFTER the FT partition (only the
+         rows that actually scheduled). Committed by record_capture post-forward.
+@@ -626,6 +643,8 @@ class FinetuneCoordinator:
+         self.reserved_fill += int(n)
+         if samples:
+             self.buffer_samples.extend(samples)
++        if req_spans:
++            self._req_spans.update(req_spans)
+         return offset
+ 
+     def release_reserve(self, n: int, samples: list | None = None) -> None:
+@@ -707,7 +726,8 @@ class FinetuneCoordinator:
+                 and self.fill_count > 0 and not self.pending_backward):
+             self._trigger_backward(reason="epoch-end flush")
+ 
+-    def record_capture(self, n: int, sample_lens: list[int] | None = None) -> None:
++    def record_capture(self, n: int, sample_lens: list[int] | None = None,
++                       req_ids: list[str] | None = None) -> None:
+         """Runner reports n FT token rows just SAVED at this step's reserved
+         offset. Commits them (and reconciles the reservation). Both backward
+         triggers fire HERE, post-forward — after the activations are saved and
+@@ -723,6 +743,11 @@ class FinetuneCoordinator:
+         self.reserved_fill = max(0, self.reserved_fill - n)
+         if sample_lens:
+             self.sample_lens.extend(int(x) for x in sample_lens)
++            if req_ids and len(req_ids) == len(sample_lens):
++                self.sample_spans.extend(self._req_spans.pop(r, None)
++                                         for r in req_ids)
++            else:
++                self.sample_spans.extend([None] * len(sample_lens))
+         if self.pending_backward or self.reserved_fill > 0:
+             return  # wait until all in-flight saves for this buffer are committed
+         if self.space_remaining() < self.min_sample_len:
+@@ -777,7 +802,7 @@ class FinetuneCoordinator:
+                 torch.cuda.synchronize()
+             self.backward_process.notify_buffer_full(
+                 self.fill_count, self.backward_sleep_s, list(self.sample_lens),
+-                epoch=self.current_epoch)
++                epoch=self.current_epoch, loss_spans=self._loss_spans())
+         elif self.relay_mode:
+             # [M4.1] Scheduler-side coordinator under TP: no local handle. Stash
+             # the trigger params for the scheduler to broadcast on SchedulerOutput
+@@ -786,12 +811,25 @@ class FinetuneCoordinator:
+             self._pending_trigger_cmd = {
+                 "n": int(self.fill_count),
+                 "sample_lens": list(self.sample_lens),
++                "loss_spans": self._loss_spans(),
+                 "epoch": int(self.current_epoch),
+                 "sleep_s": float(self.backward_sleep_s),
+                 # One int per trigger; the worker forwards it to its child once.
+                 "total_tokens_per_epoch": int(self.corpus_total_tokens),
+             }
+ 
++    def _loss_spans(self) -> list | None:
++        """Per-sample target spans for the backward, parallel to
++        ``sample_lens``; None when no sample carries spans (plain-text corpus →
++        the loss covers every token, unchanged). A length mismatch (should not
++        happen) also degrades to None rather than misaligning masks."""
++        if len(self.sample_spans) != len(self.sample_lens):
++            return None
++        if all(sp is None for sp in self.sample_spans):
++            return None
++        return [None if sp is None else [list(x) for x in sp]
++                for sp in self.sample_spans]
++
+     def gpu_pause_backward(self) -> None:
+         """[Phase 5] Ask the backward child to yield the GPU (it pauses at its
+         next layer boundary). Called by the model runner before an inference
+@@ -882,6 +920,7 @@ class FinetuneCoordinator:
+         self.fill_count = 0
+         self.reserved_fill = 0
+         self.sample_lens = []
++        self.sample_spans = []
+         self.buffer_samples = []
+         self.pending_backward = False
+         self.admission_open = True
+@@ -900,14 +939,16 @@ class FinetuneCoordinator:
+         self._pending_trigger_cmd = None
+         return cmd
+ 
+-    def apply_relayed_saved(self, n: int, sample_lens: list[int] | None) -> None:
++    def apply_relayed_saved(self, n: int, sample_lens: list[int] | None,
++                            req_ids: list[str] | None = None) -> None:
+         """Scheduler side: apply the worker's relayed per-step saved-token count
+         (its record_capture result). Mirrors record_capture so the scheduler's
+         buffer accounting advances and its buffer-full / epoch-flush trigger can
+         fire (→ _pending_trigger_cmd)."""
+         if not self.relay_mode:
+             return
+-        self.record_capture(int(n), list(sample_lens) if sample_lens else None)
++        self.record_capture(int(n), list(sample_lens) if sample_lens else None,
++                            list(req_ids) if req_ids else None)
+ 
+     def apply_relayed_done(self, resp: dict | None) -> None:
+         """Scheduler side: apply the worker's relayed backward-done ack. Mirrors
+@@ -926,6 +967,7 @@ class FinetuneCoordinator:
+         self.fill_count = 0
+         self.reserved_fill = 0
+         self.sample_lens = []
++        self.sample_spans = []
+         self.buffer_samples = []
+         self.pending_backward = False
+         self.admission_open = True
+@@ -944,9 +986,10 @@ class FinetuneCoordinator:
+         # arrives (pipe sends are ordered, so it lands before the work signal
+         # below and the very first cycle line already shows ``N/total``).
+         total = int(cmd.get("total_tokens_per_epoch", 0) or 0)
+-        if total > 0 and not self._corpus_meta_relayed:
++        # [RSI ingest] re-forward when the corpus grows (rows ingested at runtime).
++        if total > 0 and total != self._corpus_meta_relayed:
+             self.backward_process.set_corpus_meta(total)
+-            self._corpus_meta_relayed = True
++            self._corpus_meta_relayed = total
+         if self.fwd_throttle_active:
+             self.gpu_pause_backward()
+         if self.capture_done_evt is not None:
+@@ -956,7 +999,8 @@ class FinetuneCoordinator:
+         self.pending_backward = True
+         self.backward_process.notify_buffer_full(
+             int(cmd.get("n", 0)), self.backward_sleep_s,
+-            list(cmd.get("sample_lens", [])), epoch=int(cmd.get("epoch", 0)))
++            list(cmd.get("sample_lens", [])), epoch=int(cmd.get("epoch", 0)),
++            loss_spans=cmd.get("loss_spans"))
+ 
+     def poll_backward_relay(self) -> dict | None:
+         """Worker side: non-blocking poll of this rank's backward child. Returns
+diff --git a/dserve-vllm/vllm/deltaserve/finetuning_store.py b/dserve-vllm/vllm/deltaserve/finetuning_store.py
+index b7d2844..3336cdb 100644
+--- a/dserve-vllm/vllm/deltaserve/finetuning_store.py
++++ b/dserve-vllm/vllm/deltaserve/finetuning_store.py
+@@ -26,7 +26,7 @@ DeltaServe's Req/Batch + the bwd-loss bookkeeping (those return in Phase 3).
+ """
+ 
+ import uuid
+-from bisect import bisect_left, bisect_right
++from bisect import bisect_left, bisect_right, insort
+ from collections import defaultdict, deque
+ from dataclasses import dataclass
+ from typing import Callable
+@@ -42,6 +42,9 @@ class FinetuningSample:
+     prompt_ids: list[int]
+     text: str
+     adapter: str | None = None
++    # [chat SFT] target token spans ``(s, e)`` (positions s..e-1 carry the
++    # loss); None = every next-token prediction (plain-text corpus).
++    loss_spans: list[tuple[int, int]] | None = None
+ 
+     @property
+     def input_len(self) -> int:
+@@ -59,9 +62,17 @@ class FinetuningStore:
+         total_epochs: int = 1,
+         max_saved_finetuning_tokens: int = 256,
+         max_prepare: int | None = None,
++        chat_loss_on: str = "all",
++        chat_thinking: str = "off",
++        tokenizer=None,
+     ) -> None:
+         self.data_path = data_path
+         self.tokenize = tokenize
++        # [chat SFT] a ``.jsonl`` corpus is rendered with the HF tokenizer's chat
++        # template (``deltaserve/chat_sft.py``) instead of ``tokenize(text)``.
++        self.chat_loss_on = chat_loss_on
++        self.chat_thinking = chat_thinking
++        self.tokenizer = tokenizer
+         self.adapter = adapter
+         self.total_epochs = int(total_epochs)
+         self.max_saved_finetuning_tokens = int(max_saved_finetuning_tokens)
+@@ -102,14 +113,33 @@ class FinetuningStore:
+         if self.data_path is None:
+             return 0
+         loaded = 0
++        no_target = 0
+         dropped_lens: list[int] = []
+         cap = self.max_saved_finetuning_tokens
++        is_chat = self.data_path.endswith(".jsonl")
++        if is_chat:
++            import json
++
++            from vllm.deltaserve.chat_sft import encode_chat
++            if self.tokenizer is None:
++                raise ValueError("a .jsonl FT corpus needs the HF tokenizer "
++                                 "(FinetuningStore(tokenizer=...))")
+         with open(self.data_path, encoding="utf-8") as f:
+             for line in f:
+                 text = line.strip()
+                 if not text:
+                     continue
+-                prompt_ids = list(self.tokenize(text))
++                spans = None
++                if is_chat:
++                    prompt_ids, spans = encode_chat(
++                        self.tokenizer, json.loads(text)["messages"],
++                        self.chat_loss_on, self.chat_thinking)
++                    if not spans:
++                        no_target += 1
++                        continue
++                    text = ""          # the rendered ids are the sample
++                else:
++                    prompt_ids = list(self.tokenize(text))
+                 if len(prompt_ids) > cap:
+                     dropped_lens.append(len(prompt_ids))
+                     continue
+@@ -118,6 +148,7 @@ class FinetuningStore:
+                     prompt_ids=prompt_ids,
+                     text=text,
+                     adapter=self.adapter,
++                    loss_spans=spans,
+                 )
+                 idx = len(self.samples)
+                 self.samples.append(sample)
+@@ -135,6 +166,11 @@ class FinetuningStore:
+             f"(min={self._sorted_template[0] if self._sorted_template else 0}, "
+             f"max={self._sorted_template[-1] if self._sorted_template else 0})"
+         )
++        if is_chat:
++            n_tgt = sum(e - st for sm in self.samples for st, e in sm.loss_spans)
++            dprint(f"[ft-store] chat SFT (loss_on={self.chat_loss_on}, "
++                   f"thinking={self.chat_thinking}): {n_tgt} target tokens; "
++                   f"{no_target} rows without a usable target skipped")
+         if dropped_lens:
+             dprint(
+                 f"[ft-store] dropped {len(dropped_lens)} oversized samples "
+@@ -146,6 +182,66 @@ class FinetuningStore:
+             )
+         return loaded
+ 
++    def add_rows(self, rows: list) -> dict:
++        """[RSI ingest] Append samples while serving. ``rows`` are chat rows
++        (``{"messages": [...]}``, rendered + masked like a .jsonl corpus) or
++        plain-text rows (``{"text": ...}`` / ``str``, loss on every token).
++        New samples join the CURRENT epoch's selectable pool. If nothing was
++        ever trained (e.g. the server started with no corpus and admission
++        already walked the epoch counter forward), the epoch counter restarts
++        at 0 so the ingested data gets its full ``total_epochs`` passes.
++        Returns counts for the caller."""
++        from vllm.deltaserve.chat_sft import encode_chat
++        added = tokens = no_target = too_long = 0
++        new_idx = []
++        for row in rows:
++            spans = None
++            if isinstance(row, dict) and "messages" in row:
++                if self.tokenizer is None:
++                    raise ValueError("chat rows need the HF tokenizer")
++                ids, spans = encode_chat(self.tokenizer, row["messages"],
++                                         self.chat_loss_on, self.chat_thinking)
++                if not spans:
++                    no_target += 1
++                    continue
++                text = ""
++            else:
++                text = row.get("text", "") if isinstance(row, dict) else str(row)
++                ids = list(self.tokenize(text))
++            if len(ids) > self.max_saved_finetuning_tokens or len(ids) < 2:
++                too_long += 1
++                continue
++            sample = FinetuningSample(request_id=uuid.uuid4().hex, prompt_ids=ids,
++                                      text=text, adapter=self.adapter, loss_spans=spans)
++            idx = len(self.samples)
++            self.samples.append(sample)
++            self.id2idx[sample.request_id] = idx
++            self.trained.append(False)
++            self.total_tokens_in_memory += sample.input_len
++            new_idx.append(idx)
++            added += 1
++            tokens += sample.input_len
++        if new_idx:
++            self._build_templates()
++            ever_trained = getattr(self, "_ever_trained", False)
++            if not ever_trained and not self._claimed:
++                self.current_epoch = 0
++                self._reset_epoch_structures()
++            else:
++                for idx in new_idx:
++                    ln = self.samples[idx].input_len
++                    self.len_buckets.setdefault(ln, deque()).append(idx)
++                    if ln not in self.sorted_lengths:
++                        insort(self.sorted_lengths, ln)
++        dprint(f"[ft-store] ingested {added} samples ({tokens} tokens); skipped "
++               f"{no_target} without a target, {too_long} too long; corpus now "
++               f"{len(self.samples)} samples / {self.total_tokens_in_memory} tokens, "
++               f"epoch {self.current_epoch}/{self.total_epochs}")
++        return {"added": added, "tokens": tokens, "skipped_no_target": no_target,
++                "skipped_too_long": too_long, "corpus_samples": len(self.samples),
++                "corpus_tokens": self.total_tokens_in_memory,
++                "epoch": self.current_epoch}
++
+     def _build_templates(self) -> None:
+         tmp: dict[int, list[int]] = defaultdict(list)
+         for idx, sample in enumerate(self.samples):
+@@ -251,6 +347,7 @@ class FinetuningStore:
+                 continue
+             self._claimed.discard(idx)
+             self.trained[idx] = True
++            self._ever_trained = True
+             marked += 1
+         return marked
+ 
+diff --git a/dserve-vllm/vllm/deltaserve/ft_injector.py b/dserve-vllm/vllm/deltaserve/ft_injector.py
+index 4d68bb6..2c16318 100644
+--- a/dserve-vllm/vllm/deltaserve/ft_injector.py
++++ b/dserve-vllm/vllm/deltaserve/ft_injector.py
+@@ -42,6 +42,9 @@ class FinetuneInjector:
+             total_epochs=finetune_config.num_epochs,
+             max_saved_finetuning_tokens=finetune_config.max_saved_finetuning_tokens,
+             max_prepare=finetune_config.max_prepare,
++            chat_loss_on=getattr(finetune_config, "chat_loss_on", "all"),
++            chat_thinking=getattr(finetune_config, "chat_thinking", "off"),
++            tokenizer=getattr(tokenize, "tokenizer", None),
+         )
+         self.store.load()
+ 
+diff --git a/dserve-vllm/vllm/deltaserve/ft_meta.py b/dserve-vllm/vllm/deltaserve/ft_meta.py
+index 5f70c8b..71a1b3d 100644
+--- a/dserve-vllm/vllm/deltaserve/ft_meta.py
++++ b/dserve-vllm/vllm/deltaserve/ft_meta.py
+@@ -43,6 +43,37 @@ def rope_theta_of(hf_config: Any) -> float:
+     return _DEFAULT_ROPE_THETA
+ 
+ 
++_YARN_KEYS = ("extrapolation_factor", "attn_factor", "beta_fast", "beta_slow",
++              "apply_yarn_scaling", "truncate")
++
++
++def rope_scaling_of(hf_config: Any) -> dict | None:
++    """RoPE scaling for the backward's RoPE remat, in the form
++    ``bwd_services.common.ops.rope_cos_sin`` takes: None (plain RoPE) or
++    ``{"rope_type": "yarn", "factor", "original_max_position_embeddings", …}``
++    with the same optional YaRN keys vLLM's ``get_rope`` forwards. Any other
++    scaling type raises: the backward would otherwise silently rematerialize
++    RoPE differently from the served forward (e.g. Qwen3-32B served with
++    YaRN x4 for 131k context, as RSI-system does)."""
++    rp = getattr(hf_config, "rope_parameters", None)
++    if not isinstance(rp, dict):
++        rp = getattr(hf_config, "rope_scaling", None)
++    if not isinstance(rp, dict):
++        return None
++    kind = rp.get("rope_type", rp.get("type", "default"))
++    if kind in (None, "default"):
++        return None
++    if kind == "yarn" and "mrope_section" not in rp:
++        out = {"rope_type": "yarn", "factor": float(rp["factor"]),
++               "original_max_position_embeddings":
++                   int(rp["original_max_position_embeddings"])}
++        out.update({k: rp[k] for k in _YARN_KEYS if k in rp})
++        return out
++    raise NotImplementedError(
++        f"[deltaserve] the backward's RoPE remat does not implement rope "
++        f"scaling {rp!r}; supported: none or plain yarn")
++
++
+ def read_lora_scaling(adapter_path: str | None) -> float:
+     """``lora_alpha / r`` from the adapter's ``adapter_config.json`` (1.0 if
+     the file is absent). The backward bakes this into B at publish time."""
+@@ -116,6 +147,7 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
+         "head_dim": head_dim,
+         "intermediate_size": int(hf_config.intermediate_size),
+         "rope_theta": rope_theta_of(hf_config),
++        "rope_scaling": rope_scaling_of(hf_config),
+         "lora_scaling": float(lora_scaling),
+         # Optimizer hyperparameters (Phase 3 LoRA backward).
+         "learning_rate": float(ft_cfg.learning_rate),
+@@ -134,6 +166,9 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
+             int(ft_cfg.backward_cuda_graph_attn_l_max),
+         "max_saved_finetuning_tokens":
+             int(ft_cfg.max_saved_finetuning_tokens),
++        # [long context] graphs captured at this many rows (0 = the buffer).
++        "backward_cuda_graph_max_tokens":
++            int(getattr(ft_cfg, "backward_cuda_graph_max_tokens", 0)),
+         # Forward-side activation saves the backward may short-circuit on:
+         # post-RoPE q/k/v per layer (``attn_qh/kh/vh``) and the attention
+         # context (``attn_ctx``). The child re-checks ``save_attn_qkv`` against
+@@ -145,6 +180,12 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
+         # head counts / intermediate size by tp_size to slice its LOCAL shards,
+         # and uses tp_rank to slice the (full, disk-loaded) FT-adapter master
+         # into this rank's LoRA shard. tp_size=1 → local == full.
++        # Adapter export (PEFT dir): where + how often, and the source adapter
++        # whose adapter_config.json (r, alpha, targets) the export copies.
++        "adapter_save_dir": getattr(ft_cfg, "adapter_save_dir", None),
++        "num_epochs": int(ft_cfg.num_epochs),
++        "adapter_save_every": int(getattr(ft_cfg, "adapter_save_every", 100) or 0),
++        "finetuning_lora_path": ft_cfg.finetuning_lora_path,
+         "tp_size": int(tp_size),
+         "tp_rank": int(tp_rank),
+         # Rendezvous port for the backward-only NCCL group (the backward
+diff --git a/dserve-vllm/vllm/deltaserve/ft_scheduler.py b/dserve-vllm/vllm/deltaserve/ft_scheduler.py
+index f72f195..5bbe499 100644
+--- a/dserve-vllm/vllm/deltaserve/ft_scheduler.py
++++ b/dserve-vllm/vllm/deltaserve/ft_scheduler.py
+@@ -20,7 +20,7 @@ import time
+ 
+ from vllm.config import CUDAGraphMode
+ from vllm.deltaserve import dprint
+-from vllm.deltaserve.coordinator import get_coordinator
++from vllm.deltaserve.coordinator import batch_tokens_of, get_coordinator
+ from vllm.deltaserve.estimator import (
+     MergedExecutionEstimator,
+     StepExecutionTracker,
+@@ -79,6 +79,7 @@ class FinetuneScheduler(AsyncScheduler):
+         # knows when no more samples can fit (full).
+         self._coord = get_coordinator(capacity=capacity,
+                                       per_step_budget=capacity)
++        self._coord.batch_tokens = batch_tokens_of(ft_cfg, capacity)
+         lengths = self._ft_injector.store.sorted_lengths
+         if lengths:
+             self._coord.min_sample_len = lengths[0]
+@@ -193,7 +194,12 @@ class FinetuneScheduler(AsyncScheduler):
+         from transformers import AutoTokenizer
+ 
+         tok = AutoTokenizer.from_pretrained(self.vllm_config.model_config.tokenizer)
+-        return lambda text: tok(text)["input_ids"]
++
++        def tokenize(text):
++            return tok(text)["input_ids"]
++
++        tokenize.tokenizer = tok   # chat .jsonl corpora render with its template
++        return tokenize
+ 
+     # ─── SLO-aware FT admission budget ──────────────────────────────────
+     def _current_step_features(self) -> tuple[StepFeatures, float | None]:
+@@ -245,6 +251,23 @@ class FinetuneScheduler(AsyncScheduler):
+                              b_d=b_d, k=k, prefill_lens=prefill_lens or None)
+         return feats, earliest_arrival
+ 
++    def deltaserve_ingest(self, rows: list) -> dict:
++        """[RSI ingest] Append FT samples to the live store (EngineCore utility
++        call, runs on the engine loop thread between steps). Keeps the
++        coordinator's corpus total / smallest sample length in sync and re-tells
++        the backward child the corpus size (directly at TP=1; under TP the next
++        relayed trigger carries it)."""
++        store = self._ft_injector.store
++        stats = store.add_rows(rows)
++        coord = self._coord
++        coord.corpus_total_tokens = int(store.total_tokens_in_memory)
++        if store.sorted_lengths:
++            coord.min_sample_len = min(store.sorted_lengths)
++        if coord.backward_process is not None:
++            coord.backward_process.set_corpus_meta(coord.corpus_total_tokens)
++        self._ft_exhausted_logged = False
++        return stats
++
+     def admit_ft_to_step(self) -> tuple[int, list]:
+         """Three-regime SLO-aware FT admission. Replaces the previous
+         closed-form quadratic ``_slo_ft_budget`` + ``next_ft_requests`` chain.
+@@ -433,6 +456,12 @@ class FinetuneScheduler(AsyncScheduler):
+                 break
+             if cur_t_ft + candidate.input_len > token_cap:
+                 break
++            # [long context] samples beyond the first in this step stay within
++            # the backward batch size; only a sample admitted ALONE may use the
++            # rest of the buffer (space_remaining enforces the same across steps).
++            if (admitted and cur_t_ft + candidate.input_len
++                    > min(token_cap, self._coord.batch_tokens)):
++                break
+ 
+             # Hypothetical features with this sample added. Subset convention:
+             # T_in += input_len AND T_ft += input_len (FT prefill is prefill).
+@@ -584,6 +613,15 @@ class FinetuneScheduler(AsyncScheduler):
+         if coord.epoch_flush_pending and (
+                 coord.fill_count + coord.reserved_fill) > 0:
+             return True  # flush flag set at inject → step so the backward fires  # epoch tail awaiting flush
++        store = self._ft_injector.store
++        has_training_data = (
++            store.has_next() or store.current_epoch < store.total_epochs)
++        # The RPS gate is time-dependent and schedule() rechecks it. Sleeping
++        # on an empty inference queue while this gate is held would prevent
++        # its quiet-window release until another client request arrives.
++        # Keep polling only while training has data (or another epoch) left.
++        if coord.rps_throttle_active and has_training_data:
++            return True
+         # Otherwise step for FT only if a sample can ACTUALLY be admitted this
+         # step (buffer space ≥ one sample). A partially-full buffer that can't
+         # grow and isn't flush-pending is not work — returning True there would
+@@ -591,10 +629,9 @@ class FinetuneScheduler(AsyncScheduler):
+         # idles enough to let FT resume. `next_ft_budget` is buffer-space-based
+         # (the SLO gate may still admit 0 under load, but then inference itself
+         # keeps the engine busy via super().has_requests()).
+-        if coord.next_ft_budget() >= max(1, coord.min_sample_len):
+-            store = self._ft_injector.store
+-            if store.has_next() or store.current_epoch < store.total_epochs:
+-                return True
++        if (has_training_data
++                and coord.next_ft_budget() >= max(1, coord.min_sample_len)):
++            return True
+         # [diag] FT has nothing left to do — selectable pool drained AND no
+         # epochs remain AND nothing is in-flight. Log once so the user can
+         # distinguish a clean natural end ("ran out of epochs/samples") from
+@@ -823,8 +860,8 @@ class FinetuneScheduler(AsyncScheduler):
+         # inference arrival rate sliding-window exceeds the close
+         # threshold, reopen when it drops below the open threshold.
+         # See FinetuneCoordinator.check_rps_throttle for the design
+-        # choice (Option B: overload admission_open, no separate
+-        # gate). No-op when rps_throttle_enable is False.
++        # and the independent latch checked by next_ft_budget.
++        # No-op when rps_throttle_enable is False.
+         _ft_cfg = self.vllm_config.finetune_config
+         if _ft_cfg.rps_throttle_enable:
+             import time as _t
+@@ -962,7 +999,11 @@ class FinetuneScheduler(AsyncScheduler):
+             ft_samples = [s for s in ft_samples if s is not None]
+             if ft_tokens > 0:
+                 output._ft_write_offset = self._coord.reserve(
+-                    ft_tokens, samples=ft_samples)
++                    ft_tokens, samples=ft_samples,
++                    req_spans={rid: getattr(getattr(self.requests[rid],
++                                                    "_ft_sample", None),
++                                            "loss_spans", None)
++                               for rid in scheduled_ft})
+             output._ft_samples = ft_samples
+             output._ft_tokens_reserved = ft_tokens
+         # Stash the admission snapshot on the output so _rollback_ft_step
+@@ -1133,7 +1174,8 @@ class FinetuneScheduler(AsyncScheduler):
+                 self._coord.apply_relayed_done(_done)
+             _saved = getattr(model_runner_output, "finetune_saved", None)
+             if _saved:
+-                self._coord.apply_relayed_saved(_saved[0], _saved[1])
++                self._coord.apply_relayed_saved(
++                    _saved[0], _saved[1], _saved[2] if len(_saved) > 2 else None)
+ 
+         # Retire FT requests BEFORE the base loop: free their KV the same step
+         # WITHOUT touching finished_req_ids (so the frontend never sees them).
+diff --git a/dserve-vllm/vllm/entrypoints/serve/finetune/api_router.py b/dserve-vllm/vllm/entrypoints/serve/finetune/api_router.py
+index b112887..ea0fda5 100644
+--- a/dserve-vllm/vllm/entrypoints/serve/finetune/api_router.py
++++ b/dserve-vllm/vllm/entrypoints/serve/finetune/api_router.py
+@@ -64,6 +64,25 @@ async def stop_finetuning(raw_request: Request):
+                         content={"stopped": ok})
+ 
+ 
++@router.post("/ft/ingest")
++async def ft_ingest(raw_request: Request):
++    """[RSI] Append FT samples to the live store while serving. Body:
++    ``{"rows": [{"messages": [...]}, ...]}`` (chat rows, rendered and masked
++    per ``finetune.chat_loss_on`` / ``chat_thinking``) or ``{"text": ...}``
++    rows. The samples train in the inference gaps once FT is started."""
++    body = await raw_request.json()
++    rows = body.get("rows") if isinstance(body, dict) else body
++    if not isinstance(rows, list):
++        return JSONResponse(status_code=400, content={"error": "expected {\"rows\": [...]}"})
++    try:
++        stats = await engine_client(raw_request).engine_core.call_utility_async(
++            "deltaserve_ingest_ft", rows)
++    except Exception as e:
++        logger.exception("ft/ingest failed")
++        return JSONResponse(status_code=500, content={"error": str(e)})
++    return JSONResponse(status_code=200 if "error" not in stats else 409, content=stats)
++
++
+ def attach_router(app: FastAPI):
+     ft_cfg = getattr(app.state.args, "finetune_config", None)
+     if ft_cfg is not None and getattr(ft_cfg, "enable_finetuning", False):
+diff --git a/dserve-vllm/vllm/v1/core/sched/scheduler.py b/dserve-vllm/vllm/v1/core/sched/scheduler.py
+index 45a5169..b6b47cc 100644
+--- a/dserve-vllm/vllm/v1/core/sched/scheduler.py
++++ b/dserve-vllm/vllm/v1/core/sched/scheduler.py
+@@ -387,7 +387,9 @@ class Scheduler(SchedulerInterface):
+                 + request.num_output_placeholders
+                 - request.num_computed_tokens
+             )
+-            if 0 < self.scheduler_config.long_prefill_token_threshold < num_new_tokens:
++            # [DeltaServe] FT samples prefill in one step (never chunked).
++            if (0 < self.scheduler_config.long_prefill_token_threshold
++                    < num_new_tokens and not request.is_finetuning):
+                 num_new_tokens = self.scheduler_config.long_prefill_token_threshold
+             num_new_tokens = min(num_new_tokens, token_budget)
+ 
+@@ -653,7 +655,9 @@ class Scheduler(SchedulerInterface):
+                     # requests, which have output tokens.
+                     num_new_tokens = request.num_tokens - num_computed_tokens
+                     threshold = self.scheduler_config.long_prefill_token_threshold
+-                    if 0 < threshold < num_new_tokens:
++                    # [DeltaServe] FT samples prefill in one step (never
++                    # chunked), so the per-request chunk cap skips them.
++                    if 0 < threshold < num_new_tokens and not request.is_finetuning:
+                         num_new_tokens = threshold
+ 
+                     # chunked prefill has to be enabled explicitly to allow
+diff --git a/dserve-vllm/vllm/v1/engine/core.py b/dserve-vllm/vllm/v1/engine/core.py
+index 1a1a33e..76187f6 100644
+--- a/dserve-vllm/vllm/v1/engine/core.py
++++ b/dserve-vllm/vllm/v1/engine/core.py
+@@ -656,6 +656,8 @@ class EngineCore:
+             coord.fill_count = 0
+             coord.reserved_fill = 0
+             coord.sample_lens = []
++            coord.sample_spans = []
++            coord._req_spans = {}
+             coord.admission_open = True
+             coord.pending_backward = False
+             coord.epoch_flush_pending = False
+@@ -983,6 +985,14 @@ class EngineCore:
+ 
+         self.model_executor.reset_mm_cache()
+ 
++    def deltaserve_ingest_ft(self, rows: list) -> dict:
++        """[DeltaServe RSI] Append FT samples to the running server's store
++        (utility call from POST /ft/ingest)."""
++        ingest = getattr(self.scheduler, "deltaserve_ingest", None)
++        if ingest is None:
++            return {"error": "finetuning is not enabled on this server"}
++        return ingest(rows)
++
+     def reset_prefix_cache(
+         self, reset_running_requests: bool = False, reset_connector: bool = False
+     ) -> bool:
+diff --git a/dserve-vllm/vllm/v1/outputs.py b/dserve-vllm/vllm/v1/outputs.py
+index 2f389ed..0f12d59 100644
+--- a/dserve-vllm/vllm/v1/outputs.py
++++ b/dserve-vllm/vllm/v1/outputs.py
+@@ -272,7 +272,8 @@ class ModelRunnerOutput:
+     # ``finetune_backward_done`` = the child's ack payload when this rank's
+     # backward finished (so the scheduler commits trained samples + reopens
+     # admission). Both None on ordinary steps / TP=1.
+-    finetune_saved: tuple[int, list[int]] | None = None
++    # (n, sample_lens, ft_req_ids) — the ids (chat SFT loss spans) ride along.
++    finetune_saved: tuple[int, list[int], list[str]] | None = None
+     finetune_backward_done: dict | None = None
+     # ``finetune_ft_started`` mirrors the worker coordinator's ft_started flag
+     # (flipped by the collective_rpc from POST /start_finetuning, which only
+diff --git a/dserve-vllm/vllm/v1/worker/gpu_model_runner.py b/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
+index d1afade..d2d3a8d 100644
+--- a/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
++++ b/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
+@@ -3974,6 +3974,7 @@ class GPUModelRunner(
+         self._ft_mask_gpu = None
+         self._ft_num = 0
+         self._ft_sample_lens = []
++        self._ft_req_ids = []
+         self._ft_start = 0
+         self._ft_contiguous = False
+         self._ft_positions_np = None
+@@ -3985,6 +3986,7 @@ class GPUModelRunner(
+         cu = np.concatenate(([0], np.cumsum(num_scheduled_tokens_np))).astype(np.int64)
+         mask = np.zeros(total, dtype=bool)
+         sample_lens: list[int] = []
++        ft_req_ids: list[str] = []
+         ft_first = -1
+         ft_last = -1
+         for i, req_id in enumerate(req_ids):
+@@ -3993,6 +3995,7 @@ class GPUModelRunner(
+                 # req_ids order == the order rows appear in hidden_states[mask],
+                 # so these per-sample lengths line up with the buffer writes.
+                 sample_lens.append(int(cu[i + 1] - cu[i]))
++                ft_req_ids.append(req_id)
+                 if ft_first < 0:
+                     ft_first = int(cu[i])
+                 ft_last = int(cu[i + 1])  # exclusive end
+@@ -4002,6 +4005,9 @@ class GPUModelRunner(
+         self._ft_has = True
+         self._ft_num = n
+         self._ft_sample_lens = sample_lens
++        # [chat SFT] same order: the coordinator maps each id to its sample's
++        # loss spans (the scheduler's FT order may differ from this one).
++        self._ft_req_ids = ft_req_ids
+         # Slice-path metadata: span is [ft_first, ft_last). Contiguous iff the
+         # span's length equals the total FT token count (no inference rows
+         # interleaved within the span).
+@@ -4098,7 +4104,7 @@ class GPUModelRunner(
+         if _ftc.fwd_token_throttle_enable:
+             _thr = int(_ftc.fwd_token_throttle)
+             _inf_total = prefill + len(decode_kv)
+-            _hit = _inf_total > _thr if _thr > 0 else False
++            _hit = _ftc.should_throttle_backward(_inf_total)
+             throttle_part = (f" | fwd_throttle={_thr} "
+                              f"inf_total={_inf_total} "
+                              f"({'HIT' if _hit else 'ok'})")
+@@ -4150,6 +4156,14 @@ class GPUModelRunner(
+         if self.routed_experts_initialized:
+             self.routed_experts_capturer.clear_buffer()
+ 
++        # A pure FT forward can leave a prefill-completion event pending
++        # without holding the forward-token throttle. Poll it on every step,
++        # before the zero-token early return (which skips sample_tokens), so
++        # backward can resume even if no more inference requests arrive.
++        _idle_coord = getattr(self, "_ft_coordinator", None)
++        if _idle_coord is not None:
++            self._ft_maybe_resume_backward(_idle_coord)
++
+         # [fwd_token_throttle] Idle-release safety net. ``execute_model``
+         # early-returns ~40 lines down when num_scheduled_tokens == 0
+         # (no inference in queue, no FT admitted), which is *exactly*
+@@ -4163,9 +4177,6 @@ class GPUModelRunner(
+         # configuration, so the early-return path is unchanged in the
+         # common case.
+         if getattr(self, "_throttle_held", False):
+-            _idle_coord = getattr(self, "_ft_coordinator", None)
+-            if _idle_coord is not None:
+-                self._ft_maybe_resume_backward(_idle_coord)
+             _idle_feats = getattr(
+                 scheduler_output, "_ft_step_features", None)
+             _idle_cfg = self.vllm_config.finetune_config
+@@ -4175,18 +4186,12 @@ class GPUModelRunner(
+             # empty/no-feats step trivially satisfies that — there's
+             # nothing inference-side to protect from.
+             _idle_release = True
+-            if (_idle_feats is not None
+-                    and _idle_cfg.fwd_token_throttle_enable):
+-                _idle_thr = int(_idle_cfg.fwd_token_throttle)
+-                if _idle_thr > 0:
+-                    # INFERENCE-only total (mirrors the engage-side
+-                    # decision a few hundred lines below): inf_prefill
+-                    # + decode_count. FT tokens excluded so an FT-only
+-                    # step doesn't keep the bwd paused.
+-                    _idle_inf_prefill = (int(_idle_feats.t_in)
+-                                         - int(_idle_feats.t_ft))
+-                    _idle_total = _idle_inf_prefill + int(_idle_feats.b_d)
+-                    _idle_release = _idle_total <= _idle_thr
++            if _idle_feats is not None:
++                # Same predicate as engage, including threshold zero.
++                _idle_total = (int(_idle_feats.t_in) - int(_idle_feats.t_ft)
++                               + int(_idle_feats.b_d))
++                _idle_release = not _idle_cfg.should_throttle_backward(
++                    _idle_total)
+             if _idle_release and _idle_coord is not None:
+                 _idle_coord.gpu_resume_backward()
+                 self._throttle_held = False
+@@ -4573,19 +4578,11 @@ class GPUModelRunner(
+                     or self.vllm_config.finetune_config.pause_prefill_always):
+                 _pause_prefill = _feats.t_in > 0
+                 _ft_cfg = self.vllm_config.finetune_config
+-                if _ft_cfg.fwd_token_throttle_enable:
+-                    _throttle = int(_ft_cfg.fwd_token_throttle)
+-                    if _throttle > 0:
+-                        # INFERENCE-only total = inf_prefill + decode count.
+-                        # ``t_in`` includes the FT subset, so subtract
+-                        # ``t_ft`` to isolate the inference prefill. FT
+-                        # tokens are NOT counted: an FT-only batch has
+-                        # zero inference work competing for the GPU, so
+-                        # the throttle (which exists to protect inference
+-                        # from bwd contention) shouldn't fire for it.
+-                        _inf_prefill = int(_feats.t_in) - int(_feats.t_ft)
+-                        _total = _inf_prefill + int(_feats.b_d)
+-                        _pause_throttle = _total > _throttle
++                # Count only inference work: an FT-only step must release
++                # the throttle, while threshold zero protects even one decode.
++                _total = (int(_feats.t_in) - int(_feats.t_ft)
++                          + int(_feats.b_d))
++                _pause_throttle = _ft_cfg.should_throttle_backward(_total)
+                 _pause_bwd = _pause_prefill or _pause_throttle
+             # Cross-step throttle release: if a previous step left the
+             # bwd paused for throttle reasons and this step's total has
+@@ -4859,10 +4856,12 @@ class GPUModelRunner(
+                             # counts to the EngineCore scheduler, which owns the
+                             # trigger decision (it has the corpus/min_sample_len).
+                             self._ft_relay_saved = (
+-                                int(self._ft_num), list(self._ft_sample_lens))
++                                int(self._ft_num), list(self._ft_sample_lens),
++                                list(self._ft_req_ids))
+                         else:
+                             coord.record_capture(
+-                                self._ft_num, self._ft_sample_lens)
++                                self._ft_num, self._ft_sample_lens,
++                                self._ft_req_ids)
+ 
+                 sample_hidden_states = hidden_states[logits_indices]
+                 logits = self.model.compute_logits(sample_hidden_states)
+@@ -4966,7 +4965,11 @@ class GPUModelRunner(
+         ev = getattr(self, "_ft_resume_evt", None)
+         if ev is not None and ev.query():
+             self._ft_resume_evt = None
+-            coord.gpu_resume_backward()
++            # A newer forward-token pause owns the grant now. Completing an
++            # older prefill must not release that sticky pause (sample_tokens
++            # can observe the old event after the new step has engaged it).
++            if not getattr(self, "_throttle_held", False):
++                coord.gpu_resume_backward()
+ 
+     def _ft_abort_sentinel(self, coord):
+         """[forward_interruptible / tier C] The empty output that tells the
+diff --git a/dserve-vllm/vllm/v1/worker/gpu_worker.py b/dserve-vllm/vllm/v1/worker/gpu_worker.py
+index c196baf..764e968 100644
+--- a/dserve-vllm/vllm/v1/worker/gpu_worker.py
++++ b/dserve-vllm/vllm/v1/worker/gpu_worker.py
+@@ -620,6 +620,8 @@ class Worker(WorkerBase):
+         # idle/FT-only step can fill the buffer in one eager forward. During
+         # co-serving the SLO gate caps FT tokens once the estimator is warm.
+         coordinator = get_coordinator(capacity=cap, per_step_budget=cap)
++        from vllm.deltaserve.coordinator import batch_tokens_of
++        coordinator.batch_tokens = batch_tokens_of(ft_cfg, cap)
+         coordinator.backward_process = backward_process
+         coordinator.backward_sleep_s = float(ft_cfg.backward_sleep_seconds)
+         # [DeltaServe] Phase 7 / M4.1: under TP>1 this worker-side coordinator is
+@@ -707,6 +709,9 @@ class Worker(WorkerBase):
+ 
+         am = self.model_runner.lora_manager._adapter_manager
+         slot = am.lora_index_to_id.index(FT_LORA_INT_ID)
++        # Remembered so _repin_ft_served_lora can restore exactly this slot.
++        self._ft_lora_request = ft_lora
++        self._ft_served_slot = int(slot)
+ 
+         # Gather the FT adapter's served stacked buffers: qkv_proj (3 slices q/k/v)
+         # + o_proj (1 slice), per layer. The trainer writes [slot] rows into these.
+@@ -730,6 +735,34 @@ class Worker(WorkerBase):
+         dprint(f"shared served LoRA buffers (slot={slot}, {len(layers)} layers) "
+                f"with backward process: {ack}")
+ 
++    def _repin_ft_served_lora(self) -> None:
++        """Re-add + re-pin the FT adapter after vLLM's warmup, which removes
++        every adapter (``maybe_remove_all_loras``) — the pin included. Without
++        this the FT adapter is re-loaded lazily into whichever slot is free on
++        its first request: with the inference adapter already in the shared
++        slot, the backward publishes into the INFERENCE adapter's slot while
++        FT forwards read the untouched initial weights from another slot (no
++        learning, and the served inference adapter silently overwritten).
++        Runs before any request, so the slots are empty and the FT adapter
++        lands back in the slot recorded at share time; anything else is fatal.
++        """
++        ft_lora = getattr(self, "_ft_lora_request", None)
++        if ft_lora is None:
++            return
++        from vllm.deltaserve import dprint
++
++        am = self.model_runner.lora_manager._adapter_manager
++        if ft_lora.lora_int_id not in am.lora_index_to_id:
++            self.model_runner.add_lora(ft_lora)
++        self.model_runner.pin_lora(ft_lora.lora_int_id)
++        slot = am.lora_index_to_id.index(ft_lora.lora_int_id)
++        if slot != self._ft_served_slot:
++            raise RuntimeError(
++                f"[deltaserve] FT adapter re-pinned into LoRA slot {slot}, but "
++                f"the backward publishes into slot {self._ft_served_slot}; "
++                f"slots: {am.lora_index_to_id}")
++        dprint(f"re-pinned FT adapter in served LoRA slot {slot} after warmup")
++
+     def update_config(self, overrides: dict[str, Any]) -> None:
+         self.model_runner.update_config(overrides)
+ 
+@@ -1133,6 +1166,11 @@ class Worker(WorkerBase):
+ 
+         activate_triton_jit_monitor()
+ 
++        # [DeltaServe] the warmup / graph capture above ends in
++        # remove_all_adapters(), which also drops the pinned FT adapter whose
++        # slot the backward publishes into. Put it back in that same slot.
++        self._repin_ft_served_lora()
++
+         return CompilationTimes(
+             language_model=self.compilation_config.compilation_time,
+             encoder=self.compilation_config.encoder_compilation_time,
+diff --git a/tests/test_tp_trainer_graph_nccl.py b/tests/test_tp_trainer_graph_nccl.py
+index a9bbc04..8867fa3 100644
+--- a/tests/test_tp_trainer_graph_nccl.py
++++ b/tests/test_tp_trainer_graph_nccl.py
+@@ -168,6 +168,10 @@ def make_meta(fam_name, *, tp_size, tp_rank, port, graph, save_rm=False):
+ 
+ def make_service(fam_name, base, ft, meta, device):
+     svc = SERVICES[fam_name](device.index if device.type == "cuda" else 0)
++    if device.type == "cpu":
++        # The gloo regression tests reuse this harness without a CUDA device.
++        # Run-ahead throttling records CUDA events and only applies on GPUs.
++        meta = dict(meta, backward_run_ahead_boundaries=0)
+     svc.shared = {"base": {k: v.to(device) for k, v in base.items()},
+                   "ft": {k: v.to(device) for k, v in ft.items()},
+                   "meta": meta}
+diff --git a/dserve-vllm/vllm/deltaserve/chat_sft.py b/dserve-vllm/vllm/deltaserve/chat_sft.py
+new file mode 100644
+index 0000000..d400a7a
+--- /dev/null
++++ b/dserve-vllm/vllm/deltaserve/chat_sft.py
+@@ -0,0 +1,112 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++"""Chat SFT rows -> (token ids, loss spans), matching RSI-system's trainers.
++
++RSI-system (github.com/Jianshu-She/RSI-system) turns agent traces into chat
++JSONL (``{"messages": [...]}`` per line, ``rsi/finetune/DATA_FORMAT.md``) and
++trains on the assistant tokens only. The co-served trainer must see exactly the
++tokens and targets those offline trainers do, so this module ports their
++``encode`` functions:
++
++* ``"last"`` / ``"all"`` — ``rsi/finetune/train_lora.py`` (``--loss_on``,
++  ``--thinking``).
++* ``"ace"`` — ``benchmarks/ace/.../train_lora.py`` (thinking off; skips the
++  AppWorld few-shot demo dialogue; equals ``"all"`` + thinking off on
++  single-turn rows except for the prompt rendering of the first turn).
++
++A span ``(s, e)`` marks target token positions ``s .. e-1``: the loss is the
++next-token cross-entropy of predicting ``ids[j]`` from position ``j - 1`` for
++every ``j`` in a span.
++"""
++
++THINK_OFF = "<think>\n\n</think>\n\n"
++LOSS_ON = ("last", "all", "ace")
++
++
++def encode_chat(tok, messages: list[dict], loss_on: str = "all",
++                thinking: str = "off") -> tuple[list[int], list[tuple[int, int]]]:
++    """Return ``(ids, spans)``; ``spans`` is empty when the row has no usable
++    target (the caller drops it, as the offline trainers do)."""
++    if loss_on not in LOSS_ON:
++        raise ValueError(f"chat_loss_on must be one of {LOSS_ON}, got {loss_on!r}")
++    if thinking not in ("on", "off"):
++        raise ValueError(f"chat_thinking must be 'on' or 'off', got {thinking!r}")
++    if loss_on == "ace":
++        return _encode_ace(tok, messages)
++    tmpl = {} if thinking == "on" else {"enable_thinking": False}
++
++    if loss_on == "last":
++        # One target turn: prompt = the template's generation prompt for the
++        # history, exactly as at inference.
++        pre = _ids(tok.apply_chat_template(messages[:-1], tokenize=True,
++                                           add_generation_prompt=True, **tmpl))
++        full = _ids(tok.apply_chat_template(messages, tokenize=True,
++                                            add_generation_prompt=False, **tmpl))
++        if full[:len(pre)] == pre and len(full) > len(pre):
++            return full, [(len(pre), len(full))]
++        return full, []
++
++    # Every assistant turn, built turn by turn with the prefix the model was
++    # conditioned on when it generated that turn.
++    ids: list[int] = []
++    spans: list[tuple[int, int]] = []
++    nl = tok.encode("\n", add_special_tokens=False)
++    for m in messages:
++        role = m["role"]
++        if role not in ("system", "user", "assistant"):
++            raise ValueError(f"chat_loss_on='all' supports system/user/assistant, got {role}")
++        if role == "assistant":
++            ids += tok.encode("<|im_start|>assistant\n"
++                              + (THINK_OFF if thinking == "off" else ""),
++                              add_special_tokens=False)
++            body = tok.encode(m["content"] + "<|im_end|>", add_special_tokens=False)
++            spans.append((len(ids), len(ids) + len(body)))
++            ids += body + nl
++        else:
++            ids += tok.encode(f"<|im_start|>{role}\n{m['content']}<|im_end|>\n",
++                              add_special_tokens=False)
++    return ids, spans
++
++
++def _encode_ace(tok, messages: list[dict]):
++    """The ACE trainer's encode: the official template (thinking off) up to the
++    first assistant turn after the task start, then every later turn appended
++    by hand; loss on each assistant content + ``<|im_end|>``. AppWorld prompts
++    carry a few-shot demo dialogue — the task starts at the last user turn
++    saying "solve the actual task", and nothing before it is a target."""
++    start = max([i for i, m in enumerate(messages)
++                 if m["role"] == "user" and "solve the actual task" in m["content"]]
++                or [0])
++    first = next((i for i, m in enumerate(messages)
++                  if m["role"] == "assistant" and i > start), None)
++    if first is None:
++        return [], []
++    ids = tok.encode(tok.apply_chat_template(messages[:first], tokenize=False,
++                                             add_generation_prompt=True,
++                                             enable_thinking=False),
++                     add_special_tokens=False)
++    end = tok.convert_tokens_to_ids("<|im_end|>")
++    nl = tok.encode("\n", add_special_tokens=False)
++    spans: list[tuple[int, int]] = []
++    for i in range(first, len(messages)):
++        m = messages[i]
++        if m["role"] == "assistant":
++            if i != first:
++                ids += tok.encode("<|im_start|>assistant\n" + THINK_OFF,
++                                  add_special_tokens=False)
++            t = tok.encode(m["content"], add_special_tokens=False) + [end]
++            spans.append((len(ids), len(ids) + len(t)))
++            ids += t + nl
++        else:
++            ids += tok.encode(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n",
++                              add_special_tokens=False)
++    return ids, spans
++
++
++def _ids(x) -> list[int]:
++    """``apply_chat_template(tokenize=True)`` returns a list on transformers 4.x
++    and a BatchEncoding-like mapping on 5.x."""
++    if isinstance(x, dict) or hasattr(x, "keys"):
++        x = x["input_ids"]
++    return list(x)
+diff --git a/tests/test_chat_sft.py b/tests/test_chat_sft.py
+new file mode 100644
+index 0000000..d052889
+--- /dev/null
++++ b/tests/test_chat_sft.py
+@@ -0,0 +1,207 @@
++"""Chat SFT (RSI-system data) gates — run with `python`, not pytest.
++
++1. ``deltaserve.chat_sft.encode_chat`` == the offline trainers' encode, token
++   for token, on real RSI-system rows (the reference functions below are copied
++   verbatim from rsi/finetune/train_lora.py and the ACE train_lora.py).
++2. ``head_backward(loss_spans=...)`` == an autograd reference with the loss on
++   the span tokens only (mean over target tokens); no spans == the old path.
++3. Coordinator: spans follow the runner's write order (request ids), not the
++   scheduler's order.
++4. ``FinetuningStore`` loads a .jsonl corpus into ids + spans.
++
++    python tests/test_chat_sft.py [--data-dir DIR] [--tokenizer PATH]
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import sys
++import tempfile
++
++import torch
++import torch.nn.functional as F
++from transformers import AutoTokenizer
++
++from vllm.deltaserve.bwd_services.common.head import head_backward
++from vllm.deltaserve.bwd_services.common.ops import rmsnorm
++from vllm.deltaserve.chat_sft import encode_chat
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++from vllm.deltaserve.finetuning_store import FinetuningStore
++
++PASS = FAIL = 0
++
++
++def cond(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
++
++
++# ── reference encoders (verbatim from the offline trainers) ──────────────────
++THINK_OFF = "<think>\n\n</think>\n\n"
++
++
++def ref_rsi(tok, msgs, loss_on, thinking):          # rsi/finetune/train_lora.py
++    TMPL = {} if thinking == "on" else {"enable_thinking": False}
++
++    def render(m, gen=False):
++        out = tok.apply_chat_template(m, tokenize=True, add_generation_prompt=gen, **TMPL)
++        return list(out["input_ids"]) if hasattr(out, "keys") else list(out)
++
++    if loss_on == "last":
++        pre, full = render(msgs[:-1], gen=True), render(msgs)
++        return (full, [(len(pre), len(full))]) if full[:len(pre)] == pre and len(full) > len(pre) else (full, [])
++    ids, spans = [], []
++    for m in msgs:
++        if m["role"] == "assistant":
++            ids += tok.encode("<|im_start|>assistant\n" + (THINK_OFF if thinking == "off" else ""), add_special_tokens=False)
++            body = tok.encode(m["content"] + "<|im_end|>", add_special_tokens=False)
++            spans.append((len(ids), len(ids) + len(body)))
++            ids += body + tok.encode("\n", add_special_tokens=False)
++        else:
++            ids += tok.encode(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n", add_special_tokens=False)
++    return ids, spans
++
++
++def ref_ace(tok, messages):                          # benchmarks/ace/.../train_lora.py
++    END = tok.convert_tokens_to_ids("<|im_end|>")
++    start = max([i for i, m in enumerate(messages) if m["role"] == "user" and "solve the actual task" in m["content"]] or [0])
++    first = next(i for i, m in enumerate(messages) if m["role"] == "assistant" and i > start)
++    ids = tok.encode(tok.apply_chat_template(messages[:first], tokenize=False, add_generation_prompt=True,
++                                             enable_thinking=False), add_special_tokens=False)
++    labels = [-100] * len(ids)
++    nl = tok.encode("\n", add_special_tokens=False)
++    for i in range(first, len(messages)):
++        m = messages[i]
++        if m["role"] == "assistant":
++            if i != first:
++                p = tok.encode("<|im_start|>assistant\n" + THINK_OFF, add_special_tokens=False)
++                ids, labels = ids + p, labels + [-100] * len(p)
++            t = tok.encode(m["content"], add_special_tokens=False) + [END]
++            ids, labels = ids + t + nl, labels + t + [-100] * len(nl)
++        else:
++            p = tok.encode(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n", add_special_tokens=False)
++            ids, labels = ids + p, labels + [-100] * len(p)
++    return ids, labels
++
++
++def spans_to_labels(ids, spans):
++    lab = [-100] * len(ids)
++    for s, e in spans:
++        lab[s:e] = ids[s:e]
++    return lab
++
++
++def encoder_parity(tok, data_dir, n_rows):
++    print("encode_chat == offline trainers")
++    for name in ("formula", "finer", "appworld"):
++        path = os.path.join(data_dir, f"{name}.jsonl")
++        if not os.path.exists(path):
++            print(f"  (skip {name}: {path} missing)")
++            continue
++        rows = [json.loads(ln)["messages"] for ln in open(path) if ln.strip()][:n_rows]
++        modes = [("ace", "off"), ("all", "off")] + ([("last", "off")] if name != "appworld" else [])
++        for loss_on, thinking in modes:
++            bad = 0
++            for msgs in rows:
++                got_ids, got_sp = encode_chat(tok, msgs, loss_on, thinking)
++                if loss_on == "ace":
++                    rid, rlab = ref_ace(tok, msgs)
++                    ok = got_ids == rid and spans_to_labels(got_ids, got_sp) == rlab
++                else:
++                    rid, rsp = ref_rsi(tok, msgs, loss_on, thinking)
++                    ok = got_ids == rid and [tuple(x) for x in got_sp] == [tuple(x) for x in rsp]
++                bad += not ok
++            cond(f"{name} loss_on={loss_on}: {len(rows)} rows identical", bad == 0, f"{bad} mismatches")
++
++
++def head_parity():
++    print("head_backward with loss spans")
++    torch.manual_seed(0)
++    D, vocab = 32, 500
++    seq_lens = [12, 7, 9]
++    b_start = [0, 12, 19]
++    n = sum(seq_lens)
++    final_in = torch.randn(n, D, dtype=torch.float32)
++    lm_w = torch.randn(vocab, D) * 0.1
++    norm_w = torch.rand(D) + 0.5
++    ids = torch.randint(0, vocab, (n,))
++    spans = [[(4, 9), (10, 12)], None, [(0, 3)]]      # (0, 3): position 0 is skipped
++
++    # reference: autograd CE over the selected predicting rows, mean over them
++    x = final_in.clone().requires_grad_(True)
++    h = rmsnorm(x, norm_w, 1e-6).float()
++    rows, tg = [], []
++    for k, (st, ln) in enumerate(zip(b_start, seq_lens)):
++        sel = range(1, ln) if spans[k] is None else [j for s, e in spans[k] for j in range(max(s, 1), e)]
++        for j in sel:
++            rows.append(st + j - 1)
++            tg.append(int(ids[st + j]))
++    logits = h[rows] @ lm_w.t()
++    ref_loss = F.cross_entropy(logits, torch.tensor(tg), reduction="mean")
++    ref_loss.backward()
++    loss, n_valid, g = head_backward(final_in, lm_w, norm_w, 1e-6, ids, seq_lens, b_start,
++                                     vocab, loss_spans=spans)
++    cond("n_valid = number of target tokens", n_valid == len(rows), f"{n_valid} vs {len(rows)}")
++    cond("loss matches", abs(loss - ref_loss.item()) < 1e-5, f"{loss:.6f} vs {ref_loss.item():.6f}")
++    err = (g - x.grad).abs().max().item() / (x.grad.abs().max().item() + 1e-12)
++    cond("grad_final_in matches", err < 1e-5, f"rel err {err:.1e}")
++    l0, n0, g0 = head_backward(final_in, lm_w, norm_w, 1e-6, ids, seq_lens, b_start, vocab)
++    l1, n1, g1 = head_backward(final_in, lm_w, norm_w, 1e-6, ids, seq_lens, b_start, vocab,
++                               loss_spans=[None, None, None])
++    cond("all-None spans == no spans (old path)", l0 == l1 and n0 == n1 and torch.equal(g0, g1))
++
++
++def coordinator_order():
++    print("coordinator: spans follow the runner's write order")
++    c = FinetuneCoordinator(capacity=1024)
++    sp_a, sp_b, sp_c = [(3, 5)], [(1, 4), (6, 8)], None
++    # scheduler order a, b, c …
++    c.reserve(30, samples=["A", "B", "C"], req_spans={"ft_a": sp_a, "ft_b": sp_b, "ft_c": sp_c})
++    # … but the runner wrote b, c, a
++    c.record_capture(30, [8, 12, 10], ["ft_b", "ft_c", "ft_a"])
++    got = c._loss_spans()
++    cond("spans in write order", got == [[[1, 4], [6, 8]], None, [[3, 5]]], str(got))
++    c2 = FinetuneCoordinator(capacity=1024)
++    c2.reserve(10, samples=["X"], req_spans={"x": None})
++    c2.record_capture(10, [10], ["x"])
++    cond("plain-text samples → None (loss on every token)", c2._loss_spans() is None)
++    c3 = FinetuneCoordinator(capacity=1024)
++    c3.reserve(10, samples=["X"], req_spans={"x": [(1, 2)]})
++    c3.record_capture(10, [10])                     # no ids (old runner) → no masks
++    cond("missing ids degrade to None, never misalign", c3._loss_spans() is None)
++
++
++def store_load(tok):
++    print("FinetuningStore loads .jsonl")
++    rows = [{"messages": [{"role": "user", "content": "What is 2+2?"},
++                          {"role": "assistant", "content": "4"}]},
++            {"messages": [{"role": "user", "content": "no answer"}]}]
++    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
++        f.write("\n".join(json.dumps(r) for r in rows) + "\n")
++    st = FinetuningStore(f.name, tokenize=lambda t: tok(t)["input_ids"], max_saved_finetuning_tokens=4096,
++                         chat_loss_on="ace", tokenizer=tok)
++    n = st.load()
++    os.unlink(f.name)
++    s0 = st.samples[0] if st.samples else None
++    cond("1 row loaded, the target-less row skipped", n == 1)
++    ok = s0 is not None and tok.decode(s0.prompt_ids[s0.loss_spans[0][0]:s0.loss_spans[0][1]]) == "4<|im_end|>"
++    cond("the span decodes to the assistant answer + <|im_end|>", ok)
++
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--data-dir", default="/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/sft/data_v1")
++    ap.add_argument("--tokenizer", default="/mnt/weka/home/jianshu.she/scratch/Qwen3-32B")
++    ap.add_argument("--rows", type=int, default=60)
++    a = ap.parse_args()
++    tok = AutoTokenizer.from_pretrained(a.tokenizer)
++    encoder_parity(tok, a.data_dir, a.rows)
++    head_parity()
++    coordinator_order()
++    store_load(tok)
++    print(f"\n{PASS} passed, {FAIL} failed")
++    sys.exit(1 if FAIL else 0)
+diff --git a/tests/test_rope_yarn.py b/tests/test_rope_yarn.py
+new file mode 100644
+index 0000000..1dc7994
+--- /dev/null
++++ b/tests/test_rope_yarn.py
+@@ -0,0 +1,115 @@
++"""Backward RoPE with YaRN == vLLM's YaRNScalingRotaryEmbedding (run with `python`).
++
++RSI-system serves Qwen3-32B with YaRN x4 (131072 ctx). YaRN changes the rotary
++frequencies at EVERY position and scales cos/sin by mscale, so the backward's
++RoPE remat must reproduce it exactly or the LoRA gradients are wrong.
++
++    python tests/test_rope_yarn.py [--yarn-config DIR]
++"""
++
++from __future__ import annotations
++
++import argparse
++import sys
++
++import torch
++from transformers import AutoConfig
++
++from vllm.deltaserve.bwd_services.common.ops import apply_rope, rope_backward, rope_cos_sin
++from vllm.deltaserve.ft_meta import rope_scaling_of
++from vllm.model_executor.layers.rotary_embedding.yarn_scaling_rope import (
++    YaRNScalingRotaryEmbedding,
++)
++
++PASS = FAIL = 0
++
++
++def cond(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
++
++
++def _vllm_yarn_cache(hd, orig, theta, factor):
++    """vLLM's own YaRN cos/sin cache, via its methods on a bare instance (the
++    CustomOp constructor needs a device-bearing vLLM config; the math does not)."""
++    from vllm.model_executor.layers.rotary_embedding.common import yarn_get_mscale
++    ref = object.__new__(YaRNScalingRotaryEmbedding)
++    ref.head_size = ref.rotary_dim = hd
++    ref.max_position_embeddings = orig
++    ref.base = theta
++    ref.scaling_factor = factor
++    ref.extrapolation_factor = ref.attn_factor = 1
++    ref.beta_fast, ref.beta_slow, ref.truncate = 32, 1, True
++    ref.mscale = float(yarn_get_mscale(factor))
++    return ref._compute_cos_sin_cache()
++
++
++def against_vllm(theta=1e6, hd=128, factor=4.0, orig=32768):
++    print(f"cos/sin + rotation vs vLLM YaRN (theta={theta:g}, head_dim={hd}, x{factor:g})")
++    cache_all = _vllm_yarn_cache(hd, orig, theta, factor)
++    sc = {"rope_type": "yarn", "factor": factor, "original_max_position_embeddings": orig}
++    pos = torch.tensor([0, 1, 7, 513, 4095, 32767, 40000, 131071])
++    cache = cache_all[pos].float()
++    cos_r, sin_r = cache[:, : hd // 2], cache[:, hd // 2:]
++    cos, sin = rope_cos_sin(pos, hd, theta, sc)
++    err = max((cos - cos_r).abs().max().item(), (sin - sin_r).abs().max().item())
++    cond("cos/sin == vLLM YaRN cache (incl. mscale)", err < 1e-5, f"max abs err {err:.1e}")
++    plain_c, _ = rope_cos_sin(pos, hd, theta)
++    cond("YaRN differs from plain RoPE (so the fix matters)",
++         (plain_c - cos).abs().max().item() > 1e-2)
++
++    torch.manual_seed(0)
++    n, H = len(pos), 4
++    q = torch.randn(n, H, hd)
++    # NeoX rotation with vLLM's cache, written out independently
++    c, s_ = cos_r[:, None, :], sin_r[:, None, :]
++    x1, x2 = q[..., : hd // 2], q[..., hd // 2:]
++    q_r = torch.cat([x1 * c - x2 * s_, x2 * c + x1 * s_], dim=-1)
++    q_o = apply_rope(q, cos, sin)
++    err = (q_o - q_r).abs().max().item() / q_r.abs().max().item()
++    cond("apply_rope == NeoX rotation with vLLM's cache", err < 1e-5, f"rel err {err:.1e}")
++    g = torch.randn(n, H, hd)
++    lhs = (g * apply_rope(q, cos, sin)).sum()
++    rhs = (rope_backward(g, cos, sin) * q).sum()
++    cond("rope_backward is the adjoint under mscale", abs(lhs - rhs) / abs(lhs) < 1e-5)
++
++
++def config_parsing(yarn_dir):
++    print("rope_scaling_of")
++    class C:  # transformers 5 / vLLM-normalized form
++        rope_parameters = {"rope_theta": 1e6, "rope_type": "yarn", "factor": 4.0,
++                           "original_max_position_embeddings": 32768}
++    got = rope_scaling_of(C())
++    cond("rope_parameters (yarn) parsed", got == {"rope_type": "yarn", "factor": 4.0,
++                                                  "original_max_position_embeddings": 32768}, str(got))
++    class P:
++        rope_parameters = {"rope_theta": 1e6, "rope_type": "default"}
++    cond("plain RoPE → None", rope_scaling_of(P()) is None)
++    class L:
++        rope_parameters = {"rope_theta": 5e5, "rope_type": "llama3", "factor": 8.0}
++    try:
++        rope_scaling_of(L())
++        cond("unsupported scaling raises", False)
++    except NotImplementedError:
++        cond("unsupported scaling raises", True)
++    if yarn_dir:
++        try:
++            got = rope_scaling_of(AutoConfig.from_pretrained(yarn_dir))
++            cond(f"RSI-system YaRN model config parsed ({yarn_dir.rsplit('/', 1)[-1]})",
++                 got is not None and got["factor"] == 4.0
++                 and got["original_max_position_embeddings"] == 32768, str(got))
++        except OSError as e:
++            print(f"  (skip real config: {e})")
++
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--yarn-config",
++                    default="/mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/models/Qwen3-32B-yarn131k")
++    a = ap.parse_args()
++    against_vllm()
++    config_parsing(a.yarn_config)
++    print(f"\n{PASS} passed, {FAIL} failed")
++    sys.exit(1 if FAIL else 0)
+diff --git a/tests/test_adapter_export.py b/tests/test_adapter_export.py
+new file mode 100644
+index 0000000..661c7e9
+--- /dev/null
++++ b/tests/test_adapter_export.py
+@@ -0,0 +1,113 @@
++"""FT adapter export (PEFT dir) gates — run with `python`, not pytest. CPU/gloo.
++
++1. TP=1: ``export_adapter`` writes the fp32 masters under their original PEFT
++   names and full shapes, plus an adapter_config.json, and refreshes latest/.
++2. TP=2: after identical training, the shards gathered + merged by rank 0
++   equal the TP=1 export (q/k/v B row shards, o A column shards).
++3. ``adapter_save_every`` exports from inside process_backward.
++
++    python tests/test_adapter_export.py
++"""
++
++import json
++import os
++import sys
++import tempfile
++from pathlib import Path
++
++import torch
++import torch.distributed as dist
++import torch.multiprocessing as mp
++from safetensors.torch import load_file
++
++TESTS = str(Path(__file__).resolve().parent)
++sys.path.insert(0, TESTS)
++import test_tp_trainer_graph_nccl as T  # noqa: E402
++
++T.GEOM["qwen3"].update(hidden=48, Hq=8, Hkv=4, inter=128)
++PORT = 29741
++PASS = FAIL = 0
++
++
++def cond(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
++
++
++def train(svc, full, steps=3):
++    starts = [0, T.SEQ_LENS[0]]
++    for _ in range(steps):
++        acts = T.remat_activations(svc, full["embed"], full["ids"], T.SEQ_LENS, starts)
++        svc.process_backward(acts, T.SEQ_LENS, sum(T.SEQ_LENS), epoch=0)
++
++
++def worker(rank, path, out):
++    full = torch.load(path)
++    meta = T.make_meta("qwen3", tp_size=2, tp_rank=rank, port=PORT, graph=False)
++    svc = T.make_service("qwen3", T.shard_base(full["base"], rank, 2, "qwen3"),
++                         full["ft"], meta, torch.device("cpu"))
++    svc._src_adapter = None
++    train(svc, full)
++    svc.export_adapter(os.path.join(out, "tp2"))
++    dist.destroy_process_group()
++
++
++def main():
++    full = T.build_full("qwen3", seed=11)
++    with tempfile.TemporaryDirectory(prefix="adapter_export_") as tmp:
++        # source adapter_config.json the export should copy
++        src = os.path.join(tmp, "src")
++        os.makedirs(src)
++        json.dump({"peft_type": "LORA", "r": 4, "lora_alpha": 8,
++                   "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"]},
++                  open(os.path.join(src, "adapter_config.json"), "w"))
++
++        print("TP=1 export")
++        meta = T.make_meta("qwen3", tp_size=1, tp_rank=0, port=0, graph=False)
++        meta.update(adapter_save_dir=os.path.join(tmp, "periodic"), adapter_save_every=2,
++                    finetuning_lora_path=src)
++        ref = T.make_service("qwen3", full["base"], full["ft"], meta, torch.device("cpu"))
++        train(ref, full)
++        ref.export_adapter(os.path.join(tmp, "tp1"))
++        sd = load_file(os.path.join(tmp, "tp1", "adapter_model.safetensors"))
++        cond("same tensor names as the source adapter", set(sd) == set(full["ft"]))
++        cond("full (unsharded) shapes", all(sd[k].shape == full["ft"][k].shape for k in sd))
++        masters = {ref._lora_keys[k]: ref.lora[k[0]][k[1]][k[2]].detach() for k in ref._lora_keys}
++        cond("values == fp32 masters", all(torch.equal(sd[k], masters[k]) for k in sd))
++        cond("training moved the weights",
++             any(not torch.equal(sd[k], full["ft"][k].float()) for k in sd))
++        cfg = json.load(open(os.path.join(tmp, "tp1", "adapter_config.json")))
++        cond("adapter_config copied (r, alpha, targets) + inference_mode",
++             cfg["r"] == 4 and cfg["lora_alpha"] == 8 and cfg["inference_mode"] is True)
++        cond("latest/ refreshed", os.path.exists(os.path.join(tmp, "latest", "adapter_model.safetensors")))
++        cond("adapter_save_every=2 exported cycle2/ during training",
++             os.path.exists(os.path.join(tmp, "periodic", "cycle2", "adapter_model.safetensors")))
++
++        print("TP=2 export (gloo) == TP=1")
++        path = os.path.join(tmp, "full.pt")
++        torch.save(full, path)
++        ctx = mp.get_context("spawn")
++        procs = [ctx.Process(target=worker, args=(r, path, tmp)) for r in range(2)]
++        for p in procs:
++            p.start()
++        for p in procs:
++            p.join(900)
++        cond("both ranks exited cleanly", all(p.exitcode == 0 for p in procs),
++             str([p.exitcode for p in procs]))
++        f2 = os.path.join(tmp, "tp2", "adapter_model.safetensors")
++        if os.path.exists(f2):
++            sd2 = load_file(f2)
++            err = max((sd2[k] - sd[k]).abs().max().item() / (sd[k].abs().max().item() + 1e-12)
++                      for k in sd)
++            cond("merged TP=2 adapter == TP=1 adapter", set(sd2) == set(sd) and err < 1e-4,
++                 f"max rel err {err:.1e}")
++        else:
++            cond("rank 0 wrote the TP=2 adapter", False)
++    print(f"\n{PASS} passed, {FAIL} failed")
++    sys.exit(1 if FAIL else 0)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_ft_ingest.py b/tests/test_ft_ingest.py
+new file mode 100644
+index 0000000..f046330
+--- /dev/null
++++ b/tests/test_ft_ingest.py
+@@ -0,0 +1,71 @@
++"""Runtime FT ingest (POST /ft/ingest → FinetuningStore.add_rows) — run with `python`.
++
++1. A server started with no corpus: admission may already have walked the epoch
++   counter forward; the first ingest restarts it at 0 and the rows are selectable.
++2. Chat rows get loss spans; plain-text rows don't; target-less / too-long rows skip.
++3. Ingest after training has started appends to the CURRENT epoch's pool
++   without resetting the epoch or the trained marks.
++
++    python tests/test_ft_ingest.py [--tokenizer PATH]
++"""
++
++import argparse
++import sys
++
++from transformers import AutoTokenizer
++
++from vllm.deltaserve.finetuning_store import FinetuningStore
++
++PASS = FAIL = 0
++
++
++def cond(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}{(' — ' + detail) if detail else ''}")
++
++
++def chat(q, a):
++    return {"messages": [{"role": "user", "content": q}, {"role": "assistant", "content": a}]}
++
++
++def main(tok):
++    st = FinetuningStore(None, tokenize=lambda t: tok(t)["input_ids"], total_epochs=2,
++                         max_saved_finetuning_tokens=64, chat_loss_on="ace", tokenizer=tok)
++    st.load()
++    while st.advance_epoch():      # what an admission loop on an empty store does
++        pass
++    cond("empty store walked the epochs", st.current_epoch == 2)
++    r = st.add_rows([chat("2+2?", "4"), chat("3+3?", "6"), {"text": "plain text row"},
++                     {"messages": [{"role": "user", "content": "no answer"}]},
++                     chat("long " * 80, "x")])
++    cond("3 added, 1 without target, 1 too long",
++         r["added"] == 3 and r["skipped_no_target"] == 1 and r["skipped_too_long"] == 1, str(r))
++    cond("epoch restarted at 0 (nothing trained yet)", st.current_epoch == 0)
++    cond("ingested rows are selectable", st.has_next() and st.pop_next() is not None)
++    cond("chat rows carry spans, text rows don't",
++         st.samples[0].loss_spans and st.samples[2].loss_spans is None)
++
++    # train two samples, then ingest more: same epoch, marks kept
++    a = st.pop_next()
++    b = st.pop_next(exclude=[a])
++    st.claim([a, b])
++    st.commit_claimed([a, b])
++    ep = st.current_epoch
++    st.add_rows([chat("5+5?", "10")])
++    cond("post-training ingest keeps the epoch", st.current_epoch == ep)
++    cond("trained marks kept", st.trained[st.id2idx[a.request_id]] and st.trained[st.id2idx[b.request_id]])
++    left = []
++    while (s := st.pop_next(exclude=left)) is not None:
++        left.append(s)
++    cond("new row joins the current pool (2 untrained left)", len(left) == 2, str(len(left)))
++    print(f"\n{PASS} passed, {FAIL} failed")
++    return FAIL == 0
++
++
++if __name__ == "__main__":
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--tokenizer", default="/mnt/weka/home/jianshu.she/scratch/Qwen3-32B")
++    a = ap.parse_args()
++    sys.exit(0 if main(AutoTokenizer.from_pretrained(a.tokenizer)) else 1)
+diff --git a/tests/test_long_context_backward.py b/tests/test_long_context_backward.py
+new file mode 100644
+index 0000000..52e1eaf
+--- /dev/null
++++ b/tests/test_long_context_backward.py
+@@ -0,0 +1,157 @@
++"""Long-context backward gates (run with `python`, not pytest).
++
++1. Query-chunked attention forward/backward == the dense path (fp32).
++2. Streaming LM head (online logsumexp) == the dense head (loss + grad).
++3. Coordinator ``batch_tokens``: an empty buffer takes one long sample, a
++   non-empty one only tops up to the batch size.
++4. (GPU) one Qwen3-32B-TP4-shaped layer's attention backward at 16K tokens:
++   peak memory and time, on the chunked path.
++
++    python tests/test_long_context_backward.py
++"""
++
++from __future__ import annotations
++
++import sys
++import time
++
++import torch
++
++from vllm.deltaserve.bwd_services.common import attention as A
++from vllm.deltaserve.bwd_services.common import head as Hd
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++
++DEV = "cuda" if torch.cuda.is_available() else "cpu"
++PASS = FAIL = 0
++
++
++def check(name, got, ref, tol):
++    global PASS, FAIL
++    err = (got.float() - ref.float()).abs().max().item()
++    scale = ref.float().abs().max().item() + 1e-12
++    ok = err / scale <= tol
++    PASS += ok
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}: rel max err {err / scale:.2e}")
++
++
++def cond(name, ok):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name}")
++
++
++def attn_parity():
++    print("attention: chunked vs dense")
++    torch.manual_seed(0)
++    Hq, Hkv, D = 8, 2, 64
++    seq_lens = [37, 300, 1000, 17]
++    b_start = [sum(seq_lens[:i]) for i in range(len(seq_lens))]
++    n = sum(seq_lens)
++    dims = (Hq, Hkv, D, Hkv * D)
++    qh = torch.randn(n, Hq, D, device=DEV)
++    kh = torch.randn(n, Hkv, D, device=DEV)
++    vh = torch.randn(n, Hkv, D, device=DEV)
++    g = torch.randn(n, Hq, D, device=DEV)
++    big = A.SCORES_BYTES
++    try:
++        A.SCORES_BYTES = 1 << 62                       # dense everywhere
++        ref_ctx = A.attn_forward_core(qh, kh, vh, seq_lens, b_start, dims,
++                                      torch.float32)
++        ref = A.attn_backward_core(qh, kh, vh, g, seq_lens, b_start, dims)
++        for budget in (Hq * 1000 * 4 * 100, Hq * 1000 * 4 * 16, 4096):
++            A.SCORES_BYTES = budget                    # chunk the long ones
++            cs = [A._q_chunk(Hq, ln) for ln in seq_lens]
++            ctx = A.attn_forward_core(qh, kh, vh, seq_lens, b_start, dims,
++                                      torch.float32)
++            got = A.attn_backward_core(qh, kh, vh, g, seq_lens, b_start, dims)
++            cond(f"budget={budget} chunks={cs} takes the chunked path",
++                 any(c < ln for c, ln in zip(cs, seq_lens)))
++            check(f"budget={budget} ctx", ctx, ref_ctx, 1e-5)
++            for nm, a, b in zip(("dq", "dk", "dv"), got, ref):
++                check(f"budget={budget} {nm}", a, b, 1e-5)
++    finally:
++        A.SCORES_BYTES = big
++
++
++def head_parity():
++    print("head: streaming vs dense")
++    torch.manual_seed(1)
++    D, vocab, vpad = 64, 40000, 40064               # > 2 vocab chunks + padding
++    seq_lens = [50, 3, 1, 200]
++    b_start = [sum(seq_lens[:i]) for i in range(len(seq_lens))]
++    n = sum(seq_lens)
++    final_in = torch.randn(n, D, device=DEV, dtype=torch.bfloat16)
++    lm_w = (torch.randn(vpad, D, device=DEV) * 0.05).to(torch.bfloat16)
++    norm_w = torch.rand(D, device=DEV) + 0.5
++    ids = torch.randint(0, vocab, (n,), device=DEV)
++    ids[5] = vocab - 1                               # target in the last chunk
++    ids[6] = 0
++    big = Hd.LOGITS_BYTES
++    try:
++        Hd.LOGITS_BYTES = 1 << 62
++        l_ref, nv_ref, g_ref = Hd.head_backward(final_in, lm_w, norm_w, 1e-6, ids,
++                                                seq_lens, b_start, vocab)
++        Hd.LOGITS_BYTES = 0
++        l, nv, g = Hd.head_backward(final_in, lm_w, norm_w, 1e-6, ids,
++                                    seq_lens, b_start, vocab)
++    finally:
++        Hd.LOGITS_BYTES = big
++    cond(f"n_valid {nv} == {nv_ref}", nv == nv_ref)
++    cond(f"loss {l:.6f} == {l_ref:.6f}", abs(l - l_ref) <= 1e-5 * abs(l_ref))
++    check("grad_final_in", g, g_ref, 1e-5)
++
++
++def coordinator_batching():
++    print("coordinator: batch_tokens")
++    c = FinetuneCoordinator(capacity=16384)
++    cond("default batch_tokens == capacity", c.batch_tokens == 16384)
++    c.batch_tokens = 512
++    cond("empty buffer offers the full capacity", c.space_remaining() == 16384)
++    c.fill_count = 300
++    cond("non-empty buffer tops up to batch_tokens", c.space_remaining() == 212)
++    c.fill_count = 10000
++    cond("a long sample alone leaves no space", c.space_remaining() == 0)
++    c.fill_count, c.reserved_fill = 0, 200
++    cond("reservations count as used", c.space_remaining() == 312)
++    c2 = FinetuneCoordinator(capacity=512)
++    c2.fill_count = 100
++    cond("batch_tokens == capacity keeps the original arithmetic",
++         c2.space_remaining() == 412)
++
++
++def long_attention_cost():
++    if DEV != "cuda":
++        print("long attention: skipped (no GPU)")
++        return
++    print("long attention: Qwen3-32B TP=4 shard (Hq=16, Hkv=2, Hd=128), L=16384")
++    torch.manual_seed(2)
++    Hq, Hkv, D, L = 16, 2, 128, 16384
++    dims = (Hq, Hkv, D, Hkv * D)
++    qh = torch.randn(L, Hq, D, device=DEV, dtype=torch.bfloat16)
++    kh = torch.randn(L, Hkv, D, device=DEV, dtype=torch.bfloat16)
++    vh = torch.randn(L, Hkv, D, device=DEV, dtype=torch.bfloat16)
++    g = torch.randn(L, Hq, D, device=DEV, dtype=torch.bfloat16)
++    torch.cuda.synchronize()
++    torch.cuda.reset_peak_memory_stats()
++    base = torch.cuda.memory_allocated()
++    t0 = time.perf_counter()
++    out = A.attn_backward_core(qh, kh, vh, g, [L], [0], dims, cdt=torch.bfloat16)
++    torch.cuda.synchronize()
++    dt = time.perf_counter() - t0
++    peak = (torch.cuda.max_memory_allocated() - base) / 2**30
++    dense = 4 * Hq * L * L * 4 / 2**30
++    print(f"  chunk={A._q_chunk(Hq, L)} rows, {dt * 1e3:.0f} ms/layer, "
++          f"peak +{peak:.2f} GiB (dense path would need ~{dense:.0f} GiB)")
++    cond("finite grads", all(torch.isfinite(t).all().item() for t in out))
++    cond("peak memory < 4 GiB", peak < 4)
++
++
++if __name__ == "__main__":
++    attn_parity()
++    head_parity()
++    coordinator_batching()
++    long_attention_cost()
++    print(f"\n{PASS} passed, {FAIL} failed")
++    sys.exit(1 if FAIL else 0)
+diff --git a/tests/test_tp_bucket_optional_lora.py b/tests/test_tp_bucket_optional_lora.py
+new file mode 100644
+index 0000000..262a8af
+--- /dev/null
++++ b/tests/test_tp_bucket_optional_lora.py
+@@ -0,0 +1,80 @@
++"""QKV-only LoRA: four-rank bucketed AdamW must match a TP=1 reference.
++
++CPU/gloo test through the real Qwen3 trainer, including clipping and multiple
++optimizer steps. Run with dserve-vllm/.venv/bin/python from the repository root.
++"""
++
++import sys
++import tempfile
++from pathlib import Path
++
++import torch
++import torch.distributed as dist
++import torch.multiprocessing as mp
++
++TESTS = str(Path(__file__).resolve().parent)
++sys.path.insert(0, TESTS)
++import test_tp_trainer_graph_nccl as T  # noqa: E402
++sys.path.insert(0, TESTS)
++
++# Four KV heads allow four shards; Q width 64 differs from residual width 48.
++T.GEOM["qwen3"].update(hidden=48, Hq=8, Hkv=4, inter=128)
++PORT = 29724
++
++
++def train(svc, full):
++    losses = []
++    starts = [0, T.SEQ_LENS[0]]
++    for _ in range(T.STEPS):
++        acts = T.remat_activations(svc, full["embed"], full["ids"], T.SEQ_LENS, starts)
++        loss, _ = svc.process_backward(acts, T.SEQ_LENS, sum(T.SEQ_LENS), epoch=0)
++        losses.append(loss)
++    masters = {f"L{i}.{proj}{ab}": param.detach().clone()
++               for i, layer in svc.lora.items() for proj, factors in layer.items()
++               for ab, param in factors.items()}
++    return {"losses": torch.tensor(losses), "masters": masters}
++
++
++def worker(rank, path, out):
++    full = torch.load(path)
++    svc = T.make_service("qwen3", T.shard_base(full["base"], rank, 4, "qwen3"),
++                         full["ft"], T.make_meta("qwen3", tp_size=4, tp_rank=rank,
++                         port=PORT, graph=False), torch.device("cpu"))
++    assert svc._bucket.num_groups == 2
++    result = train(svc, full)
++    torch.save(result, Path(out) / f"rank{rank}.pt")
++    dist.destroy_process_group()
++
++
++def main():
++    full = T.build_full("qwen3", seed=37)
++    full["ft"] = {k: v for k, v in full["ft"].items() if ".o_proj." not in k}
++    ref = T.make_service("qwen3", full["base"], full["ft"],
++                         T.make_meta("qwen3", tp_size=1, tp_rank=0, port=0,
++                                     graph=False), torch.device("cpu"))
++    expected = train(ref, full)
++    checker = T.H.Checker(tol=1e-4)
++    with tempfile.TemporaryDirectory(prefix="qkv_bucket_tp4_") as tmp:
++        path = str(Path(tmp) / "full.pt")
++        torch.save(full, path)
++        ctx = mp.get_context("spawn")
++        procs = [ctx.Process(target=worker, args=(rank, path, tmp)) for rank in range(4)]
++        for proc in procs:
++            proc.start()
++        for proc in procs:
++            proc.join(120)
++            assert proc.exitcode == 0, proc.exitcode
++        ranks = [torch.load(Path(tmp) / f"rank{rank}.pt") for rank in range(4)]
++        for rank, result in enumerate(ranks):
++            checker.check(f"rank {rank} loss trajectory", result["losses"], expected["losses"])
++        for key, param in expected["masters"].items():
++            if key.endswith("A"):
++                for rank, result in enumerate(ranks):
++                    checker.check(f"rank {rank} {key}", result["masters"][key], param)
++            else:
++                checker.check(f"concat {key}", torch.cat([r["masters"][key] for r in ranks]), param)
++        checker.finish()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_backward_pause_resume.py b/tests/test_backward_pause_resume.py
+new file mode 100644
+index 0000000..74e8e65
+--- /dev/null
++++ b/tests/test_backward_pause_resume.py
+@@ -0,0 +1,110 @@
++"""Backward resumes during idle without cancelling a newer throttle pause."""
++
++from contextlib import nullcontext
++import unittest
++from types import SimpleNamespace
++from unittest.mock import Mock, patch
++
++from vllm.config.finetune import FinetuneConfig
++from vllm.v1.worker.gpu_model_runner import GPUModelRunner
++
++
++class PauseResumeTest(unittest.TestCase):
++    def make_idle_runner(self, event, relay_mode):
++        coord = Mock(relay_mode=relay_mode)
++        runner = SimpleNamespace(
++            execute_model_state=None,
++            routed_experts_initialized=False,
++            speculative_config=None,
++            parallel_config=SimpleNamespace(distributed_executor_backend="mp"),
++            vllm_config=SimpleNamespace(
++                finetune_config=FinetuneConfig(
++                    fwd_token_throttle_enable=True, fwd_token_throttle=0
++                )
++            ),
++            synchronize_input_prep=nullcontext,
++            _update_states=Mock(),
++            _ft_fill_relay_fields=Mock(),
++            _ft_coordinator=coord,
++            _ft_resume_evt=event,
++            _throttle_held=False,
++        )
++        runner._ft_maybe_resume_backward = lambda c: (
++            GPUModelRunner._ft_maybe_resume_backward(runner, c)
++        )
++        return runner, coord
++
++    def execute_idle(self, runner):
++        output = SimpleNamespace(total_num_scheduled_tokens=0)
++        module = "vllm.v1.worker.gpu_model_runner"
++        with (
++            patch(module + ".has_kv_transfer_group", return_value=False),
++            patch(module + ".has_ec_transfer", return_value=False),
++        ):
++            return GPUModelRunner.execute_model(runner, output)
++
++    def test_idle_step_resumes_completed_ft_forward_without_throttle(self):
++        for relay in (False, True):
++            with self.subTest(relay_mode=relay):
++                event = Mock(query=Mock(return_value=True))
++                runner, coord = self.make_idle_runner(event, relay)
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_called_once_with()
++                self.assertIsNone(runner._ft_resume_evt)
++                # A later idle poll must not release the grant a second time.
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_called_once_with()
++
++    def test_idle_step_retries_event_after_sample_tokens_misses_completion(self):
++        for relay in (False, True):
++            with self.subTest(relay_mode=relay):
++                event = Mock(query=Mock(side_effect=[False, False, True]))
++                runner, coord = self.make_idle_runner(event, relay)
++                # The same event poll used by sample_tokens runs before the
++                # GPU completes. Idle execute_model calls must keep polling.
++                runner._ft_maybe_resume_backward(coord)
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_not_called()
++                self.assertIs(runner._ft_resume_evt, event)
++                self.execute_idle(runner)
++                coord.gpu_resume_backward.assert_called_once_with()
++                self.assertIsNone(runner._ft_resume_evt)
++
++    def test_idle_step_releases_sticky_throttle(self):
++        runner, coord = self.make_idle_runner(None, True)
++        runner._throttle_held = True
++        coord.fwd_throttle_active = True
++        self.execute_idle(runner)
++        coord.gpu_resume_backward.assert_called_once_with()
++        self.assertFalse(runner._throttle_held)
++        self.assertFalse(coord.fwd_throttle_active)
++
++    def test_completed_prefill_keeps_new_throttle_pause(self):
++        runner = SimpleNamespace(
++            _ft_resume_evt=Mock(query=lambda: True), _throttle_held=True
++        )
++        coord = Mock()
++        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
++        coord.gpu_resume_backward.assert_not_called()
++        self.assertIsNone(runner._ft_resume_evt)
++
++    def test_completed_prefill_without_throttle_resumes(self):
++        runner = SimpleNamespace(
++            _ft_resume_evt=Mock(query=lambda: True), _throttle_held=False
++        )
++        coord = Mock()
++        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
++        coord.gpu_resume_backward.assert_called_once_with()
++        self.assertIsNone(runner._ft_resume_evt)
++
++    def test_unfinished_prefill_does_not_resume(self):
++        event = Mock(query=lambda: False)
++        runner = SimpleNamespace(_ft_resume_evt=event, _throttle_held=False)
++        coord = Mock()
++        GPUModelRunner._ft_maybe_resume_backward(runner, coord)
++        coord.gpu_resume_backward.assert_not_called()
++        self.assertIs(runner._ft_resume_evt, event)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_ft_scheduler_idle_throttle.py b/tests/test_ft_scheduler_idle_throttle.py
+new file mode 100644
+index 0000000..351c041
+--- /dev/null
++++ b/tests/test_ft_scheduler_idle_throttle.py
+@@ -0,0 +1,103 @@
++"""An expiring RPS gate must not put live training to sleep."""
++
++from types import SimpleNamespace
++import unittest
++from unittest.mock import patch
++
++from vllm.config.finetune import FinetuneConfig
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++from vllm.deltaserve.ft_scheduler import FinetuneScheduler
++from vllm.v1.core.sched.async_scheduler import AsyncScheduler
++
++
++class IdleThrottleTest(unittest.TestCase):
++    def make_scheduler(self, relay):
++        coord = FinetuneCoordinator(512)
++        coord.relay_mode = relay
++        coord.rps_tracker.note_arrival(10.0)
++        self.check_rate(coord, 10.0)
++        scheduler = object.__new__(FinetuneScheduler)
++        scheduler._coord = coord
++        scheduler._profiling_mode = False
++        scheduler.vllm_config = SimpleNamespace(
++            finetune_config=FinetuneConfig(enable_finetuning=True)
++        )
++        scheduler._ft_injector = SimpleNamespace(
++            store=SimpleNamespace(
++                has_next=lambda: True,
++                current_epoch=0,
++                total_epochs=1,
++                sorted_lengths=[32],
++                has_claimed=lambda: False,
++            )
++        )
++        return scheduler, coord
++
++    def check_rate(self, coord, now):
++        coord.check_rps_throttle(
++            now, close_rps=5, open_rps=2, window_s=0.1, close_time=1
++        )
++
++    def has_idle_work(self, scheduler):
++        # The inference scheduler reports no more requests. This is exactly
++        # when EngineCore otherwise blocks waiting for another client request.
++        with patch.object(AsyncScheduler, "has_requests", return_value=False):
++            return scheduler.has_requests()
++
++    def test_throttle_keeps_engine_alive_until_quiet_window(self):
++        for relay in (False, True):
++            with self.subTest(relay=relay):
++                scheduler, coord = self.make_scheduler(relay)
++                self.assertEqual(coord.next_ft_budget(), 0)
++                self.assertTrue(self.has_idle_work(scheduler))
++                self.assertFalse(getattr(scheduler, "_ft_exhausted_logged", False))
++                # schedule() can now run again after the rate window expires.
++                self.check_rate(coord, 10.2)
++                self.assertFalse(coord.rps_throttle_active)
++                self.assertEqual(coord.next_ft_budget(), 512)
++                self.assertTrue(self.has_idle_work(scheduler))
++
++    def test_backward_done_does_not_sleep_while_rate_gate_is_held(self):
++        for relay in (False, True):
++            with self.subTest(relay=relay):
++                scheduler, coord = self.make_scheduler(relay)
++                coord.pending_backward = True
++                response = {"event": "activations_processed", "n": 512}
++                if relay:
++                    coord.apply_relayed_done(response)
++                else:
++                    coord.backward_process = SimpleNamespace(
++                        poll_response=lambda: response
++                    )
++                    coord.poll_backward()
++                self.assertFalse(coord.pending_backward)
++                self.assertTrue(coord.rps_throttle_active)
++                self.assertEqual(coord.next_ft_budget(), 0)
++                self.assertTrue(self.has_idle_work(scheduler))
++
++    def test_stopped_and_profiling_training_can_sleep(self):
++        scheduler, coord = self.make_scheduler(False)
++        coord.ft_started = False
++        self.assertFalse(self.has_idle_work(scheduler))
++        coord.ft_started = True
++        scheduler._profiling_mode = True
++        self.assertFalse(self.has_idle_work(scheduler))
++        scheduler._profiling_mode = False
++        scheduler.vllm_config.finetune_config.enable_finetuning = False
++        self.assertFalse(self.has_idle_work(scheduler))
++
++    def test_exhausted_data_can_sleep_with_stale_rate_gate(self):
++        scheduler, _ = self.make_scheduler(False)
++        store = scheduler._ft_injector.store
++        store.has_next = lambda: False
++        store.current_epoch = store.total_epochs
++        self.assertFalse(self.has_idle_work(scheduler))
++
++    def test_next_epoch_keeps_rate_gate_polling(self):
++        scheduler, _ = self.make_scheduler(False)
++        scheduler._ft_injector.store.has_next = lambda: False
++        self.assertTrue(self.has_idle_work(scheduler))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_fwd_token_throttle.py b/tests/test_fwd_token_throttle.py
+new file mode 100644
+index 0000000..63d31f7
+--- /dev/null
++++ b/tests/test_fwd_token_throttle.py
+@@ -0,0 +1,32 @@
++"""The shared pause/release predicate must protect a one-token decode."""
++import unittest
++
++from vllm.config.finetune import FinetuneConfig
++
++
++class ForwardThrottleTest(unittest.TestCase):
++    def test_zero_threshold_protects_single_decode(self):
++        cfg = FinetuneConfig(fwd_token_throttle_enable=True,
++                             fwd_token_throttle=0)
++        self.assertTrue(cfg.should_throttle_backward(1))
++        self.assertTrue(cfg.should_throttle_backward(512))
++        # Both an empty step and pure FT have zero inference tokens: release.
++        self.assertFalse(cfg.should_throttle_backward(0))
++
++    def test_positive_threshold_remains_strict(self):
++        cfg = FinetuneConfig(fwd_token_throttle_enable=True,
++                             fwd_token_throttle=32)
++        self.assertFalse(cfg.should_throttle_backward(32))
++        self.assertTrue(cfg.should_throttle_backward(33))
++
++    def test_disabled_and_negative_threshold(self):
++        cfg = FinetuneConfig(fwd_token_throttle_enable=False,
++                             fwd_token_throttle=0)
++        self.assertFalse(cfg.should_throttle_backward(512))
++        cfg.fwd_token_throttle_enable = True
++        cfg.fwd_token_throttle = -1
++        self.assertFalse(cfg.should_throttle_backward(512))
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/tests/test_rps_throttle_admission.py b/tests/test_rps_throttle_admission.py
+new file mode 100644
+index 0000000..48bbc30
+--- /dev/null
++++ b/tests/test_rps_throttle_admission.py
+@@ -0,0 +1,61 @@
++"""RPS admission must survive backward completion and FT abort rollback."""
++import unittest
++from types import SimpleNamespace
++
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++
++
++class RpsAdmissionTest(unittest.TestCase):
++    def make_coord(self):
++        coord = FinetuneCoordinator(512)
++        coord.rps_tracker.note_arrival(10.0)
++        self.check(coord, 10.0)
++        self.assertTrue(coord.rps_throttle_active)
++        self.assertEqual(coord.next_ft_budget(), 0)
++        return coord
++
++    def check(self, coord, now):
++        coord.check_rps_throttle(now, close_rps=5, open_rps=2,
++                                 window_s=.1, close_time=1)
++
++    def test_tp_backward_done_cannot_bypass_throttle(self):
++        coord = self.make_coord()
++        coord.relay_mode = True
++        coord.pending_backward = True
++        coord.apply_relayed_done({'event': 'activations_processed', 'n': 512})
++        self.check(coord, 10.01)
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++    def test_single_rank_backward_done_cannot_bypass_throttle(self):
++        coord = self.make_coord()
++        coord.pending_backward = True
++        coord.backward_process = SimpleNamespace(poll_response=lambda: {'event': 'activations_processed', 'n': 512})
++        coord.poll_backward()
++        self.check(coord, 10.01)
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++    def test_abort_snapshot_cannot_bypass_throttle(self):
++        coord = FinetuneCoordinator(512)
++        snapshot = coord.snapshot_admission()
++        coord.rps_tracker.note_arrival(10.0)
++        self.check(coord, 10.0)
++        coord.restore_admission(snapshot)
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++    def test_quiet_window_releases_and_preserves_other_gates(self):
++        coord = self.make_coord()
++        self.check(coord, 10.2)
++        self.assertFalse(coord.rps_throttle_active)
++        self.assertEqual(coord.next_ft_budget(), 512)
++        coord.pending_backward = True
++        self.assertEqual(coord.next_ft_budget(), 0)
++        coord.pending_backward = False
++        coord.reserved_fill = 512
++        self.assertEqual(coord.next_ft_budget(), 0)
++        coord.reserved_fill = 0
++        coord.ft_started = False
++        self.assertEqual(coord.next_ft_budget(), 0)
++
++
++if __name__ == '__main__':
++    unittest.main()
