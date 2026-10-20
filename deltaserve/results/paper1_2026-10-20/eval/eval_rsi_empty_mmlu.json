@@ -1,0 +1,8724 @@
+{
+ "task": "mmlu",
+ "context": null,
+ "model": "rsi",
+ "results": {
+  "accuracy": 0.764,
+  "correct": 764,
+  "total": 1000
+ },
+ "errors": {
+  "errors": [
+   {
+    "index": 0
+   },
+   {
+    "index": 1
+   },
+   {
+    "index": 3
+   },
+   {
+    "index": 8
+   },
+   {
+    "index": 28
+   },
+   {
+    "index": 29
+   },
+   {
+    "index": 33
+   },
+   {
+    "index": 35
+   },
+   {
+    "index": 38
+   },
+   {
+    "index": 44
+   },
+   {
+    "index": 45
+   },
+   {
+    "index": 50
+   },
+   {
+    "index": 53
+   },
+   {
+    "index": 59
+   },
+   {
+    "index": 65
+   },
+   {
+    "index": 75
+   },
+   {
+    "index": 81
+   },
+   {
+    "index": 82
+   },
+   {
+    "index": 92
+   },
+   {
+    "index": 95
+   },
+   {
+    "index": 96
+   },
+   {
+    "index": 99
+   },
+   {
+    "index": 100
+   },
+   {
+    "index": 101
+   },
+   {
+    "index": 106
+   },
+   {
+    "index": 118
+   },
+   {
+    "index": 119
+   },
+   {
+    "index": 121
+   },
+   {
+    "index": 123
+   },
+   {
+    "index": 132
+   },
+   {
+    "index": 137
+   },
+   {
+    "index": 139
+   },
+   {
+    "index": 144
+   },
+   {
+    "index": 151
+   },
+   {
+    "index": 154
+   },
+   {
+    "index": 166
+   },
+   {
+    "index": 168
+   },
+   {
+    "index": 169
+   },
+   {
+    "index": 170
+   },
+   {
+    "index": 176
+   },
+   {
+    "index": 178
+   },
+   {
+    "index": 190
+   },
+   {
+    "index": 191
+   },
+   {
+    "index": 205
+   },
+   {
+    "index": 208
+   },
+   {
+    "index": 209
+   },
+   {
+    "index": 212
+   },
+   {
+    "index": 215
+   },
+   {
+    "index": 217
+   },
+   {
+    "index": 219
+   },
+   {
+    "index": 221
+   },
+   {
+    "index": 228
+   },
+   {
+    "index": 236
+   },
+   {
+    "index": 241
+   },
+   {
+    "index": 245
+   },
+   {
+    "index": 249
+   },
+   {
+    "index": 254
+   },
+   {
+    "index": 258
+   },
+   {
+    "index": 260
+   },
+   {
+    "index": 264
+   },
+   {
+    "index": 270
+   },
+   {
+    "index": 273
+   },
+   {
+    "index": 280
+   },
+   {
+    "index": 281
+   },
+   {
+    "index": 282
+   },
+   {
+    "index": 289
+   },
+   {
+    "index": 291
+   },
+   {
+    "index": 297
+   },
+   {
+    "index": 298
+   },
+   {
+    "index": 299
+   },
+   {
+    "index": 301
+   },
+   {
+    "index": 306
+   },
+   {
+    "index": 313
+   },
+   {
+    "index": 315
+   },
+   {
+    "index": 319
+   },
+   {
+    "index": 322
+   },
+   {
+    "index": 324
+   },
+   {
+    "index": 329
+   },
+   {
+    "index": 332
+   },
+   {
+    "index": 339
+   },
+   {
+    "index": 340
+   },
+   {
+    "index": 341
+   },
+   {
+    "index": 343
+   },
+   {
+    "index": 344
+   },
+   {
+    "index": 345
+   },
+   {
+    "index": 346
+   },
+   {
+    "index": 352
+   },
+   {
+    "index": 353
+   },
+   {
+    "index": 361
+   },
+   {
+    "index": 365
+   },
+   {
+    "index": 369
+   },
+   {
+    "index": 370
+   },
+   {
+    "index": 374
+   },
+   {
+    "index": 376
+   },
+   {
+    "index": 383
+   },
+   {
+    "index": 399
+   },
+   {
+    "index": 400
+   },
+   {
+    "index": 403
+   },
+   {
+    "index": 405
+   },
+   {
+    "index": 407
+   },
+   {
+    "index": 411
+   },
+   {
+    "index": 416
+   },
+   {
+    "index": 418
+   },
+   {
+    "index": 419
+   },
+   {
+    "index": 424
+   },
+   {
+    "index": 428
+   },
+   {
+    "index": 430
+   },
+   {
+    "index": 438
+   },
+   {
+    "index": 442
+   },
+   {
+    "index": 444
+   },
+   {
+    "index": 445
+   },
+   {
+    "index": 453
+   },
+   {
+    "index": 457
+   },
+   {
+    "index": 475
+   },
+   {
+    "index": 486
+   },
+   {
+    "index": 490
+   },
+   {
+    "index": 493
+   },
+   {
+    "index": 497
+   },
+   {
+    "index": 511
+   },
+   {
+    "index": 514
+   },
+   {
+    "index": 515
+   },
+   {
+    "index": 523
+   },
+   {
+    "index": 524
+   },
+   {
+    "index": 529
+   },
+   {
+    "index": 530
+   },
+   {
+    "index": 547
+   },
+   {
+    "index": 553
+   },
+   {
+    "index": 558
+   },
+   {
+    "index": 559
+   },
+   {
+    "index": 567
+   },
+   {
+    "index": 574
+   },
+   {
+    "index": 578
+   },
+   {
+    "index": 579
+   },
+   {
+    "index": 588
+   },
+   {
+    "index": 590
+   },
+   {
+    "index": 591
+   },
+   {
+    "index": 592
+   },
+   {
+    "index": 593
+   },
+   {
+    "index": 607
+   },
+   {
+    "index": 608
+   },
+   {
+    "index": 610
+   },
+   {
+    "index": 611
+   },
+   {
+    "index": 613
+   },
+   {
+    "index": 619
+   },
+   {
+    "index": 624
+   },
+   {
+    "index": 625
+   },
+   {
+    "index": 635
+   },
+   {
+    "index": 637
+   },
+   {
+    "index": 638
+   },
+   {
+    "index": 639
+   },
+   {
+    "index": 647
+   },
+   {
+    "index": 649
+   },
+   {
+    "index": 655
+   },
+   {
+    "index": 656
+   },
+   {
+    "index": 659
+   },
+   {
+    "index": 661
+   },
+   {
+    "index": 669
+   },
+   {
+    "index": 670
+   },
+   {
+    "index": 672
+   },
+   {
+    "index": 674
+   },
+   {
+    "index": 675
+   },
+   {
+    "index": 681
+   },
+   {
+    "index": 685
+   },
+   {
+    "index": 688
+   },
+   {
+    "index": 693
+   },
+   {
+    "index": 697
+   },
+   {
+    "index": 702
+   },
+   {
+    "index": 703
+   },
+   {
+    "index": 719
+   },
+   {
+    "index": 722
+   },
+   {
+    "index": 728
+   },
+   {
+    "index": 730
+   },
+   {
+    "index": 737
+   },
+   {
+    "index": 740
+   },
+   {
+    "index": 742
+   },
+   {
+    "index": 748
+   },
+   {
+    "index": 752
+   },
+   {
+    "index": 756
+   },
+   {
+    "index": 760
+   },
+   {
+    "index": 762
+   },
+   {
+    "index": 765
+   },
+   {
+    "index": 767
+   },
+   {
+    "index": 769
+   },
+   {
+    "index": 775
+   },
+   {
+    "index": 778
+   },
+   {
+    "index": 786
+   },
+   {
+    "index": 787
+   },
+   {
+    "index": 791
+   },
+   {
+    "index": 793
+   },
+   {
+    "index": 799
+   },
+   {
+    "index": 801
+   },
+   {
+    "index": 803
+   },
+   {
+    "index": 804
+   },
+   {
+    "index": 806
+   },
+   {
+    "index": 808
+   },
+   {
+    "index": 811
+   },
+   {
+    "index": 812
+   },
+   {
+    "index": 820
+   },
+   {
+    "index": 821
+   },
+   {
+    "index": 823
+   },
+   {
+    "index": 827
+   },
+   {
+    "index": 829
+   },
+   {
+    "index": 837
+   },
+   {
+    "index": 845
+   },
+   {
+    "index": 848
+   },
+   {
+    "index": 855
+   },
+   {
+    "index": 861
+   },
+   {
+    "index": 874
+   },
+   {
+    "index": 878
+   },
+   {
+    "index": 880
+   },
+   {
+    "index": 881
+   },
+   {
+    "index": 890
+   },
+   {
+    "index": 899
+   },
+   {
+    "index": 901
+   },
+   {
+    "index": 902
+   },
+   {
+    "index": 903
+   },
+   {
+    "index": 907
+   },
+   {
+    "index": 908
+   },
+   {
+    "index": 915
+   },
+   {
+    "index": 920
+   },
+   {
+    "index": 922
+   },
+   {
+    "index": 923
+   },
+   {
+    "index": 928
+   },
+   {
+    "index": 935
+   },
+   {
+    "index": 937
+   },
+   {
+    "index": 941
+   },
+   {
+    "index": 947
+   },
+   {
+    "index": 949
+   },
+   {
+    "index": 960
+   },
+   {
+    "index": 961
+   },
+   {
+    "index": 976
+   },
+   {
+    "index": 977
+   },
+   {
+    "index": 978
+   },
+   {
+    "index": 981
+   },
+   {
+    "index": 986
+   },
+   {
+    "index": 999
+   }
+  ]
+ },
+ "items": [
+  {
+   "index": 0,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. Self-assemble of virus L1 protein into VLP",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 1,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D.",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 2,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. chronic lymphocytic leukemia",
+   "prompt_tokens": 192
+  },
+  {
+   "index": 3,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. Grid based clustering",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 4,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. The cuff is deflated.",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 5,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. L <= M <= T <= R",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 6,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 7,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 8,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Salmond",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 9,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 10,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 11,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 12,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. carving",
+   "prompt_tokens": 56
+  },
+  {
+   "index": 13,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 452
+  },
+  {
+   "index": 14,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 75
+  },
+  {
+   "index": 15,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 16,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 115
+  },
+  {
+   "index": 17,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. $45",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 18,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 75
+  },
+  {
+   "index": 19,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 127",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 20,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Amygdala",
+   "prompt_tokens": 140
+  },
+  {
+   "index": 21,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. buffer",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 22,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. magnetic orientation to the poles",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 23,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. An opinion",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 24,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 50 percent.",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 25,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 136
+  },
+  {
+   "index": 26,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 276
+  },
+  {
+   "index": 27,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 162
+  },
+  {
+   "index": 28,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D.",
+   "prompt_tokens": 239
+  },
+  {
+   "index": 29,
+   "correct": false,
+   "pred": null,
+   "gold": "A",
+   "response": "To solve the proportion:\n\n$$\n\\frac{12}{18} = \\frac{?}{9}\n$$\n\nFirst, simplify $\\frac{",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 30,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Cognitive",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 31,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 0.8 N",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 32,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Yes, the elements of false imprisonment are sufficiently established \u2013 there was an intentional illegal confinement that caused harm.",
+   "prompt_tokens": 265
+  },
+  {
+   "index": 33,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. taboo, folkways, the law, and taboo",
+   "prompt_tokens": 165
+  },
+  {
+   "index": 34,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 35,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. Yes, because the modified contract price did not exceed a reasonable price.",
+   "prompt_tokens": 265
+  },
+  {
+   "index": 36,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. retrieval failure",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 37,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. gaggle",
+   "prompt_tokens": 57
+  },
+  {
+   "index": 38,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 39,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. open-structured ice crystals",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 40,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. immigration quotas",
+   "prompt_tokens": 378
+  },
+  {
+   "index": 41,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Personality.",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 42,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Reaction formation",
+   "prompt_tokens": 96
+  },
+  {
+   "index": 43,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 44,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. $520,000",
+   "prompt_tokens": 153
+  },
+  {
+   "index": 45,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D.",
+   "prompt_tokens": 303
+  },
+  {
+   "index": 46,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 47,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Victoria",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 48,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Trough",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 49,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 126
+  },
+  {
+   "index": 50,
+   "correct": false,
+   "pred": null,
+   "gold": "A",
+   "response": "We are given the equation:\n\n$$\n\\binom{23}{4} + \\binom{23}{5} = \\binom{",
+   "prompt_tokens": 91
+  },
+  {
+   "index": 51,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 179
+  },
+  {
+   "index": 52,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 239
+  },
+  {
+   "index": 53,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 135
+  },
+  {
+   "index": 54,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. sensory neuronal processes.",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 55,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Application layer",
+   "prompt_tokens": 57
+  },
+  {
+   "index": 56,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. all of the above",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 57,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. All of the above",
+   "prompt_tokens": 54
+  },
+  {
+   "index": 58,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 59,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A.",
+   "prompt_tokens": 226
+  },
+  {
+   "index": 60,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 61,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. provides specific guidelines and clear rules and procedures",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 62,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Yes, as a statement against penal interest that is not testimonial under the confrontation clause.",
+   "prompt_tokens": 236
+  },
+  {
+   "index": 63,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 106
+  },
+  {
+   "index": 64,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 75
+  },
+  {
+   "index": 65,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. warfare.",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 66,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 67,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 68,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 69,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. the money supply will increase.",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 70,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Yes, the interference is substantial, unreasonable and continuous \u2013 an injunction will be fashioned to control the nuisance.",
+   "prompt_tokens": 287
+  },
+  {
+   "index": 71,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Diffusion of responsibility",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 72,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 371
+  },
+  {
+   "index": 73,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. It cannot pass parameters by reference.",
+   "prompt_tokens": 92
+  },
+  {
+   "index": 74,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 75,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 76,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Christianity",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 77,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 78,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. All of these options.",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 79,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. \u22124, \u22123, \u22121, 6, 8",
+   "prompt_tokens": 117
+  },
+  {
+   "index": 80,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 81,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 133
+  },
+  {
+   "index": 82,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. constitutive expression of the lac operon genes",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 83,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Key exchange",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 84,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 85,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Difference threshold",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 86,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 96
+  },
+  {
+   "index": 87,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 104
+  },
+  {
+   "index": 88,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 89,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. nausea and food or drink",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 90,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 135
+  },
+  {
+   "index": 91,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. It is moving upward and slowing down.",
+   "prompt_tokens": 106
+  },
+  {
+   "index": 92,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D.",
+   "prompt_tokens": 268
+  },
+  {
+   "index": 93,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. non linearly.",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 94,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 127
+  },
+  {
+   "index": 95,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C.",
+   "prompt_tokens": 126
+  },
+  {
+   "index": 96,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A.",
+   "prompt_tokens": 176
+  },
+  {
+   "index": 97,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Not wrong, Not wrong",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 98,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 558
+  },
+  {
+   "index": 99,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B.",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 100,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 101,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. <5%",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 102,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 103,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. all of these",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 104,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. IP Network Browser",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 105,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. simply doing whatever everyone else does without thinking about why we should do what we do can hardly be thought of as worthwhile, noble, or admirable.",
+   "prompt_tokens": 196
+  },
+  {
+   "index": 106,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C.",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 107,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 108,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. depressive",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 109,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 110,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 111,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 300 J out of the system",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 112,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 89
+  },
+  {
+   "index": 113,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. CuCl2",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 114,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 163
+  },
+  {
+   "index": 115,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 203
+  },
+  {
+   "index": 116,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Anaerobic respiration.",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 117,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 118,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C.",
+   "prompt_tokens": 439
+  },
+  {
+   "index": 119,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. 840",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 120,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. to hold a ship in place",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 121,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C",
+   "prompt_tokens": 196
+  },
+  {
+   "index": 122,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 123,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C.",
+   "prompt_tokens": 261
+  },
+  {
+   "index": 124,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Decreased osteoclast activity",
+   "prompt_tokens": 196
+  },
+  {
+   "index": 125,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 1,800 and 2,800",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 126,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 99
+  },
+  {
+   "index": 127,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Temperature.  \nD. Blood glucose.",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 128,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Vaccines",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 129,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 130,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Yes, to show absence of mistake.",
+   "prompt_tokens": 180
+  },
+  {
+   "index": 131,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 132,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 125
+  },
+  {
+   "index": 133,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 263
+  },
+  {
+   "index": 134,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. (s)he experiences feelings of hopelessness and despair",
+   "prompt_tokens": 104
+  },
+  {
+   "index": 135,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Hepatitis C",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 136,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 288
+  },
+  {
+   "index": 137,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 138,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. decrease her consumption of chips and increase her consumption of dip until the marginal utility per dollar is equal for both goods.",
+   "prompt_tokens": 172
+  },
+  {
+   "index": 139,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 136
+  },
+  {
+   "index": 140,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 141
+  },
+  {
+   "index": 141,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. I II and III are correct.",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 142,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. hand gestures",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 143,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. intervening opportunity.",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 144,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. inadmissible, because it is hearsay not within any recognized exception.",
+   "prompt_tokens": 219
+  },
+  {
+   "index": 145,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Mucous cells secrete the glycoprotein mucin",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 146,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. a socialist revolution removed the need for capitalist ideology",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 147,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 148,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. A high nutrient dense diet.",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 149,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Price is ambiguous, but quantity rises.",
+   "prompt_tokens": 131
+  },
+  {
+   "index": 150,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 151,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D",
+   "prompt_tokens": 54
+  },
+  {
+   "index": 152,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 243
+  },
+  {
+   "index": 153,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 115
+  },
+  {
+   "index": 154,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B.",
+   "prompt_tokens": 339
+  },
+  {
+   "index": 155,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 156,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 226
+  },
+  {
+   "index": 157,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 123
+  },
+  {
+   "index": 158,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. sympathetic nervous system",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 159,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 160,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. African National Congress",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 161,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 162,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. the Adena",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 163,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. None of the above",
+   "prompt_tokens": 117
+  },
+  {
+   "index": 164,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 165,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 125
+  },
+  {
+   "index": 166,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. have not changed significantly.",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 167,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 171
+  },
+  {
+   "index": 168,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A.",
+   "prompt_tokens": 373
+  },
+  {
+   "index": 169,
+   "correct": false,
+   "pred": null,
+   "gold": "C",
+   "response": "We are asked to find how many **odd perfect squares** are between **5 and 211**.\n\n---\n\n### Step 1: Understand what an",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 170,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. (ii) and (iv) only",
+   "prompt_tokens": 185
+  },
+  {
+   "index": 171,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 150
+  },
+  {
+   "index": 172,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Intervening opportunity",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 173,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. It fills with fluid",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 174,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 175,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. lack an X chromosome",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 176,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. III only",
+   "prompt_tokens": 141
+  },
+  {
+   "index": 177,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 178,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C.",
+   "prompt_tokens": 146
+  },
+  {
+   "index": 179,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Routing packets through the network",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 180,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. becomes an atom of a different element always.",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 181,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 131
+  },
+  {
+   "index": 182,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 183,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 184,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 214
+  },
+  {
+   "index": 185,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 186,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 187,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 232
+  },
+  {
+   "index": 188,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Not wrong, Not wrong",
+   "prompt_tokens": 134
+  },
+  {
+   "index": 189,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. $242,000",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 190,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 140
+  },
+  {
+   "index": 191,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B.",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 192,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Yes, because in the law of negligence the defendant takes the plaintiff \"as he finds her.\"",
+   "prompt_tokens": 243
+  },
+  {
+   "index": 193,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 194,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Proactive, Groups, Under-represented, Increase",
+   "prompt_tokens": 120
+  },
+  {
+   "index": 195,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 2 / 3.",
+   "prompt_tokens": 91
+  },
+  {
+   "index": 196,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 116
+  },
+  {
+   "index": 197,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 198,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. weak",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 199,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 200,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Its component elements include availability, utilisation, and stability, as well as access.",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 201,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. DRAM",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 202,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 113
+  },
+  {
+   "index": 203,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 141
+  },
+  {
+   "index": 204,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 303
+  },
+  {
+   "index": 205,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. Increase in US international influence",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 206,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. An entity fixed effects model",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 207,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 123
+  },
+  {
+   "index": 208,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. invite the stable compliance of everyone.",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 209,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. 1.5 x 10^14 meters",
+   "prompt_tokens": 116
+  },
+  {
+   "index": 210,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 196
+  },
+  {
+   "index": 211,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 8.8 \u00d7 10^-11 M",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 212,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. liable for battery.",
+   "prompt_tokens": 213
+  },
+  {
+   "index": 213,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. high and low",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 214,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Two",
+   "prompt_tokens": 52
+  },
+  {
+   "index": 215,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Second",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 216,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 171
+  },
+  {
+   "index": 217,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. 326",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 218,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. {AND, OR}",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 219,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D.",
+   "prompt_tokens": 294
+  },
+  {
+   "index": 220,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. all of the above",
+   "prompt_tokens": 55
+  },
+  {
+   "index": 221,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 222,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. John Stuart Mill",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 223,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 110
+  },
+  {
+   "index": 224,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. are included in the wire",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 225,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Increased spending during wars, with demobilization bringing spending down but not back to prewar levels.",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 226,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 0",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 227,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. the open first quadrant",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 228,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B.",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 229,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 35",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 230,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Management displays a significant disregard for regulatory authorities.",
+   "prompt_tokens": 109
+  },
+  {
+   "index": 231,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. systematic desensitization",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 232,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. persuade voters that Senator Long had a plan to combat the Great Depression.",
+   "prompt_tokens": 380
+  },
+  {
+   "index": 233,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Public relations",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 234,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Fungus",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 235,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 134
+  },
+  {
+   "index": 236,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A",
+   "prompt_tokens": 111
+  },
+  {
+   "index": 237,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Displaced apex beat; soft first heart sound; pan-systolic murmur; short mid-diastolic murmur",
+   "prompt_tokens": 163
+  },
+  {
+   "index": 238,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 239,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 1/10 s",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 240,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 241,
+   "correct": false,
+   "pred": null,
+   "gold": "A",
+   "response": "We are given the equation of a circle:\n\n$$\nx^2 + 12y + 57 = -y^2 - 10",
+   "prompt_tokens": 109
+  },
+  {
+   "index": 242,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 758
+  },
+  {
+   "index": 243,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 248
+  },
+  {
+   "index": 244,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 245,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. Replicate in dividing cells and encodes three oncogenic proteins E5, E6 and E7",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 246,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 247,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. There will be a net flow of water into the bag, causing it to swell in size.",
+   "prompt_tokens": 175
+  },
+  {
+   "index": 248,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 228
+  },
+  {
+   "index": 249,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B.",
+   "prompt_tokens": 292
+  },
+  {
+   "index": 250,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 309
+  },
+  {
+   "index": 251,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. her lack of ability.",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 252,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. number of photons emitted, divided by the number of photons absorbed",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 253,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 119
+  },
+  {
+   "index": 254,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A.",
+   "prompt_tokens": 252
+  },
+  {
+   "index": 255,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 16%",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 256,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Co-existence of innumerable genetic variants",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 257,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. True, True",
+   "prompt_tokens": 115
+  },
+  {
+   "index": 258,
+   "correct": false,
+   "pred": null,
+   "gold": "D",
+   "response": "We are given the following probabilities for a randomly selected high school graduate:\n\n- 4-year college: 54% = 0.54  \n-",
+   "prompt_tokens": 148
+  },
+  {
+   "index": 259,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Not wrong, Not wrong",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 260,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. (D) Increased \u00a0\u00a0\u00a0 Stayed the same",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 261,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 262,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 263,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Relationship pricing.",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 264,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D. Murder.",
+   "prompt_tokens": 266
+  },
+  {
+   "index": 265,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. allopatric speciation.",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 266,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. all three structures.",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 267,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 268,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 248
+  },
+  {
+   "index": 269,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 155
+  },
+  {
+   "index": 270,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. Wrong, Wrong",
+   "prompt_tokens": 131
+  },
+  {
+   "index": 271,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 272,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. reinforced",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 273,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A.",
+   "prompt_tokens": 331
+  },
+  {
+   "index": 274,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 338
+  },
+  {
+   "index": 275,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 276,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. The commitment of the participants",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 277,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 253
+  },
+  {
+   "index": 278,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. $70",
+   "prompt_tokens": 107
+  },
+  {
+   "index": 279,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Psychology becomes again the path to fundamental problems.",
+   "prompt_tokens": 248
+  },
+  {
+   "index": 280,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 281,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. The house was not occupied at the time of his entry.",
+   "prompt_tokens": 203
+  },
+  {
+   "index": 282,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. The ribs, sternum, clavicle and vertebrae",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 283,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Big Gulp",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 284,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. constitutional, since the tax was levied not on the commercial art business as a whole but on the local activity of drawing pictures.",
+   "prompt_tokens": 327
+  },
+  {
+   "index": 285,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 286,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 287,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. he lacked the requisite state of mind.",
+   "prompt_tokens": 215
+  },
+  {
+   "index": 288,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. anaerobic energy production.",
+   "prompt_tokens": 89
+  },
+  {
+   "index": 289,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 290,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Both would increase.",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 291,
+   "correct": false,
+   "pred": null,
+   "gold": "B",
+   "response": "To estimate the combined width of the two cardboard strips, we add their widths:\n\n$$\n\\frac{5}{6} + \\frac{2}{3",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 292,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 293,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 143
+  },
+  {
+   "index": 294,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 127
+  },
+  {
+   "index": 295,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 270
+  },
+  {
+   "index": 296,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 297,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 298,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C.",
+   "prompt_tokens": 246
+  },
+  {
+   "index": 299,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A.",
+   "prompt_tokens": 213
+  },
+  {
+   "index": 300,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. All of the above",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 301,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. Yes, because Long's agency survived Frost's incompetence.",
+   "prompt_tokens": 166
+  },
+  {
+   "index": 302,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 303,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 304,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. s/3 = 4",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 305,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 389
+  },
+  {
+   "index": 306,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 307,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 308,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Vincristine",
+   "prompt_tokens": 134
+  },
+  {
+   "index": 309,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 310,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. the provision of health, housing, and education services by the state",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 311,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 451
+  },
+  {
+   "index": 312,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Water",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 313,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. True, True",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 314,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 190
+  },
+  {
+   "index": 315,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. 3.66",
+   "prompt_tokens": 109
+  },
+  {
+   "index": 316,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. the investor, because he is protected by the recording statute.",
+   "prompt_tokens": 351
+  },
+  {
+   "index": 317,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 318,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. 7.20%",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 319,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. Net exports fall and there is no change in GDP.",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 320,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 321,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Charging all costs to expense when incurred.",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 322,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D",
+   "prompt_tokens": 116
+  },
+  {
+   "index": 323,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Conscientiousness",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 324,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D. Yes, because the woman had an obligation to tell the bank about her changed financial condition due to the longstanding relationship of trust and confidence between them.",
+   "prompt_tokens": 276
+  },
+  {
+   "index": 325,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 229
+  },
+  {
+   "index": 326,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Not wrong, Not wrong",
+   "prompt_tokens": 123
+  },
+  {
+   "index": 327,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. via a protein transporter molecule.",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 328,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 96
+  },
+  {
+   "index": 329,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. admitted, provided the court instructs the jury to limit use of the evidence to the defendant's motive to burglarize.",
+   "prompt_tokens": 219
+  },
+  {
+   "index": 330,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 126
+  },
+  {
+   "index": 331,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. The number of hidden nodes",
+   "prompt_tokens": 106
+  },
+  {
+   "index": 332,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Semantic memory",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 333,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. not prevail, if the police officer reasonably believed that he was under attack.",
+   "prompt_tokens": 334
+  },
+  {
+   "index": 334,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 333
+  },
+  {
+   "index": 335,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 197
+  },
+  {
+   "index": 336,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Tropical rainforest",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 337,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Brother",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 338,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 339,
+   "correct": false,
+   "pred": null,
+   "gold": "B",
+   "response": "The function is $ f(x) = \\frac{1}{1 - x} $.\n\n### Step 1: Determine the domain\nThe function is undefined",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 340,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. Yes, because the storage of toxic chemicals in a residential community created a highly significant risk of physical harm even when reasonable care was exercised.",
+   "prompt_tokens": 285
+  },
+  {
+   "index": 341,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. 36%",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 342,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. 1",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 343,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 122
+  },
+  {
+   "index": 344,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. Saturday's child",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 345,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 346,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B.",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 347,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Somatic symptom disorder",
+   "prompt_tokens": 178
+  },
+  {
+   "index": 348,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 24",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 349,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 111
+  },
+  {
+   "index": 350,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 23",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 351,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. achievement",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 352,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. taste.",
+   "prompt_tokens": 54
+  },
+  {
+   "index": 353,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. The virion RNA is translated into a single large polyprotein",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 354,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Saturn",
+   "prompt_tokens": 56
+  },
+  {
+   "index": 355,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 140
+  },
+  {
+   "index": 356,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 142
+  },
+  {
+   "index": 357,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. community alternatives to imprisonment and institutional care",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 358,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 324
+  },
+  {
+   "index": 359,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 360,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Sulfur",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 361,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 362,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. $830,000",
+   "prompt_tokens": 195
+  },
+  {
+   "index": 363,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. A dissolution of hierarchical modes of authority into collaborative team-based decision protocols",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 364,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 365,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. Yes, because the company\u2019s promise was supported by consideration.",
+   "prompt_tokens": 272
+  },
+  {
+   "index": 366,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. (40 \u00d7 12) + (6 \u00d7 12) = 480 + 72",
+   "prompt_tokens": 178
+  },
+  {
+   "index": 367,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 148
+  },
+  {
+   "index": 368,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Positive law",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 369,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A.",
+   "prompt_tokens": 173
+  },
+  {
+   "index": 370,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. True, False",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 371,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. True, True",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 372,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 56
+  },
+  {
+   "index": 373,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. The mandibular canal, maxillary sinus, hard palate and zygomatic arch",
+   "prompt_tokens": 96
+  },
+  {
+   "index": 374,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. an undivided one-half interest in the land.",
+   "prompt_tokens": 338
+  },
+  {
+   "index": 375,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Chlamydia trachomatis and Neisseria gonorrhoeae",
+   "prompt_tokens": 199
+  },
+  {
+   "index": 376,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. 2",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 377,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 248
+  },
+  {
+   "index": 378,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 143
+  },
+  {
+   "index": 379,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 380,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 381,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. network crystals",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 382,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 0.67.",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 383,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D.",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 384,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 331
+  },
+  {
+   "index": 385,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 3y",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 386,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 387,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 388,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 304
+  },
+  {
+   "index": 389,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 390,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. direction",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 391,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. German",
+   "prompt_tokens": 48
+  },
+  {
+   "index": 392,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 393,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 394,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 395,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 396,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Earth",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 397,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 398,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 50
+  },
+  {
+   "index": 399,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. London",
+   "prompt_tokens": 51
+  },
+  {
+   "index": 400,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C.",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 401,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. (i), (ii), (iii), and (iv)",
+   "prompt_tokens": 162
+  },
+  {
+   "index": 402,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. tax reductions and open market purchases.",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 403,
+   "correct": false,
+   "pred": null,
+   "gold": "B",
+   "response": "To find John\u2019s hourly rate, we solve the equation:\n\n$$\n3.5x = 49\n$$\n\nDivide both sides by 3",
+   "prompt_tokens": 135
+  },
+  {
+   "index": 404,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. unconstitutional, because it impairs the obligation of the bondholders' contract.",
+   "prompt_tokens": 271
+  },
+  {
+   "index": 405,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 138
+  },
+  {
+   "index": 406,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 165
+  },
+  {
+   "index": 407,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B",
+   "prompt_tokens": 278
+  },
+  {
+   "index": 408,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 8%",
+   "prompt_tokens": 110
+  },
+  {
+   "index": 409,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Imperialism",
+   "prompt_tokens": 319
+  },
+  {
+   "index": 410,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. T x 1",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 411,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. Valid",
+   "prompt_tokens": 149
+  },
+  {
+   "index": 412,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 413,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 24",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 414,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Mass 5kg weight 25N",
+   "prompt_tokens": 117
+  },
+  {
+   "index": 415,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 416,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. phosphocreatine stores.",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 417,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 247
+  },
+  {
+   "index": 418,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D.",
+   "prompt_tokens": 234
+  },
+  {
+   "index": 419,
+   "correct": false,
+   "pred": null,
+   "gold": "D",
+   "response": "In a parallelogram, opposite angles are equal, and consecutive angles are supplementary (they add up to $180^\\circ$).\n\nGiven:\n-",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 420,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 127
+  },
+  {
+   "index": 421,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 422,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Ancient leaders were given divine origins to bolster their legitimacy.",
+   "prompt_tokens": 382
+  },
+  {
+   "index": 423,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. cytoplasm.",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 424,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. 1,000/250,000",
+   "prompt_tokens": 143
+  },
+  {
+   "index": 425,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. pinching the nares together for 5 minutes",
+   "prompt_tokens": 179
+  },
+  {
+   "index": 426,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 246
+  },
+  {
+   "index": 427,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 183
+  },
+  {
+   "index": 428,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D.",
+   "prompt_tokens": 298
+  },
+  {
+   "index": 429,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Control valve",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 430,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B.",
+   "prompt_tokens": 431
+  },
+  {
+   "index": 431,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 110
+  },
+  {
+   "index": 432,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Open loop",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 433,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 107
+  },
+  {
+   "index": 434,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 435,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 115
+  },
+  {
+   "index": 436,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 437,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 438,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. Challenges to the monopoly on truth held by the Roman Catholic Church on multiple fronts",
+   "prompt_tokens": 517
+  },
+  {
+   "index": 439,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 440,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Insufficient rainfall for agriculture",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 441,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 134
+  },
+  {
+   "index": 442,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. endochondral ossification and follow the somatic growth pattern.",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 443,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 18",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 444,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B",
+   "prompt_tokens": 145
+  },
+  {
+   "index": 445,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. $\\frac{3}{5}$",
+   "prompt_tokens": 104
+  },
+  {
+   "index": 446,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 242
+  },
+  {
+   "index": 447,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. A t-test for a difference in means.",
+   "prompt_tokens": 141
+  },
+  {
+   "index": 448,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. mediated generalization",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 449,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. To facilitate trade with the predominantly Muslim merchants during this era.",
+   "prompt_tokens": 515
+  },
+  {
+   "index": 450,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. its power to regulate commerce.",
+   "prompt_tokens": 113
+  },
+  {
+   "index": 451,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 452,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 149
+  },
+  {
+   "index": 453,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. percent of workers correctly placed in the group hired to do the job",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 454,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 455,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. An accumulation of inorganic phosphate.",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 456,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. phosphofructokinase.",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 457,
+   "correct": false,
+   "pred": null,
+   "gold": "A",
+   "response": "We are given the expression:\n\n$$\nM = 4a^2 - 2b^2 + a\n$$\n\nWe are to find the value",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 458,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 118
+  },
+  {
+   "index": 459,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Some houses are bigger than every apartment.",
+   "prompt_tokens": 127
+  },
+  {
+   "index": 460,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. fasting blood glucose \u2265 126 mg/dl",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 461,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 0.05 J",
+   "prompt_tokens": 89
+  },
+  {
+   "index": 462,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 386
+  },
+  {
+   "index": 463,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 464,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 132
+  },
+  {
+   "index": 465,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 20",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 466,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. They have equal magnitude and are pointed in opposite directions.",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 467,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. (ii) and (iv) only",
+   "prompt_tokens": 193
+  },
+  {
+   "index": 468,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Old Sparky",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 469,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 253
+  },
+  {
+   "index": 470,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. $2 million",
+   "prompt_tokens": 92
+  },
+  {
+   "index": 471,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. compound eye",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 472,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. hypothalamus",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 473,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Cell wall, DNA, and plasma membrane",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 474,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Divine power",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 475,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 476,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 267
+  },
+  {
+   "index": 477,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. 4x - 9y",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 478,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. medulla",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 479,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. If each person's holdings are just, then the total distribution of holdings is just.",
+   "prompt_tokens": 107
+  },
+  {
+   "index": 480,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 481,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. dissociative disorder",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 482,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 119
+  },
+  {
+   "index": 483,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. ignorance of refutation",
+   "prompt_tokens": 75
+  },
+  {
+   "index": 484,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 6.00 m",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 485,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 4 Hz",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 486,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 487,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 1500",
+   "prompt_tokens": 118
+  },
+  {
+   "index": 488,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Chicago",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 489,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. None of the above.",
+   "prompt_tokens": 111
+  },
+  {
+   "index": 490,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. Having 5 genera",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 491,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 55
+  },
+  {
+   "index": 492,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 171
+  },
+  {
+   "index": 493,
+   "correct": false,
+   "pred": null,
+   "gold": "B",
+   "response": "To find the **P-value** for a **one-sample proportion z-test**, we use the following steps:\n\n---\n\n### **Given:**\n- Null hypothesis:",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 494,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. both series and parallel frequencies.",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 495,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 24 seconds",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 496,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. (i), (ii), and (iii) only",
+   "prompt_tokens": 143
+  },
+  {
+   "index": 497,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C.",
+   "prompt_tokens": 273
+  },
+  {
+   "index": 498,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 499,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. An imagined sequence of future events",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 500,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 501,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Correlation-it would be unethical to purposefully expose middle school students to bullying behaviors, so Professor Ek should examine variables that correlate with existing instances of online",
+   "prompt_tokens": 201
+  },
+  {
+   "index": 502,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. z = 2.40",
+   "prompt_tokens": 122
+  },
+  {
+   "index": 503,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Murder.",
+   "prompt_tokens": 227
+  },
+  {
+   "index": 504,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. recover the retail value of the car.",
+   "prompt_tokens": 461
+  },
+  {
+   "index": 505,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. ~(\u2200x)(Lx \u2283 Rx)",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 506,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. frequency-dependent selection.",
+   "prompt_tokens": 113
+  },
+  {
+   "index": 507,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. were imported from other regions.",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 508,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 136
+  },
+  {
+   "index": 509,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 510,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. $140,000",
+   "prompt_tokens": 147
+  },
+  {
+   "index": 511,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. 15%",
+   "prompt_tokens": 137
+  },
+  {
+   "index": 512,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. II and III",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 513,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. A more competitive international system.",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 514,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. 4.2 ns",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 515,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. Decimal 11, Hexadecimal D, Binary 1100",
+   "prompt_tokens": 142
+  },
+  {
+   "index": 516,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Offer insulin but allow the patient to refuse it",
+   "prompt_tokens": 258
+  },
+  {
+   "index": 517,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Internet",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 518,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. M = 7, m = 4",
+   "prompt_tokens": 147
+  },
+  {
+   "index": 519,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 520,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Spleen",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 521,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. reduces by 2",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 522,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. The UN Human Rights Committee",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 523,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 139
+  },
+  {
+   "index": 524,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. human persons have a right to life.",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 525,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 195
+  },
+  {
+   "index": 526,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Autosomal dominant",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 527,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 51
+  },
+  {
+   "index": 528,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. the client.",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 529,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. 4",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 530,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B.",
+   "prompt_tokens": 522
+  },
+  {
+   "index": 531,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 194
+  },
+  {
+   "index": 532,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 533,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. True, True",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 534,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 122
+  },
+  {
+   "index": 535,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Europe's economic domination of China",
+   "prompt_tokens": 301
+  },
+  {
+   "index": 536,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 537,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 538,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Increased ketogenesis",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 539,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 119
+  },
+  {
+   "index": 540,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 125
+  },
+  {
+   "index": 541,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 542,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 190
+  },
+  {
+   "index": 543,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 297
+  },
+  {
+   "index": 544,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 545,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 546,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Khalsa",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 547,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A.",
+   "prompt_tokens": 191
+  },
+  {
+   "index": 548,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Supply loops, Recapture, Waste",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 549,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Wrong, Wrong",
+   "prompt_tokens": 132
+  },
+  {
+   "index": 550,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 551,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. \u03b22-Adrenergic agonist",
+   "prompt_tokens": 199
+  },
+  {
+   "index": 552,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 415
+  },
+  {
+   "index": 553,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Overwhelmed by the unprecedented number of social and technological changes, the twentieth century sought refuge in the longstanding traditions of the past.",
+   "prompt_tokens": 310
+  },
+  {
+   "index": 554,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. stationary bicycle",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 555,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 160
+  },
+  {
+   "index": 556,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 333
+  },
+  {
+   "index": 557,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Modified the review report to reflect the fact that the financial statements were presented on another comprehensive basis of accounting.",
+   "prompt_tokens": 173
+  },
+  {
+   "index": 558,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. 30-40 seconds.",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 559,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 560,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 55
+  },
+  {
+   "index": 561,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 562,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 563,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 564,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 100",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 565,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 566,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 626
+  },
+  {
+   "index": 567,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 568,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 569,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 144
+  },
+  {
+   "index": 570,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Either of these",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 571,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 572,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 573,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. 3 over 5",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 574,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 575,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. It makes women into men.",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 576,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 577,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Yes, because he possessed the requisite intent.",
+   "prompt_tokens": 402
+  },
+  {
+   "index": 578,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. L1 norm",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 579,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 136
+  },
+  {
+   "index": 580,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 581,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. semantic memory",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 582,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. A plan that provided economic assistance to rebuild Europe.",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 583,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 584,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 125
+  },
+  {
+   "index": 585,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 131
+  },
+  {
+   "index": 586,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Yes, the lost profits damages were sufficiently proven by the evidence, including expert testimony.",
+   "prompt_tokens": 243
+  },
+  {
+   "index": 587,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 296
+  },
+  {
+   "index": 588,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 122
+  },
+  {
+   "index": 589,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 590,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. Masseter",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 591,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D. Dialysis center: Type II error, towel manufacturer: Type II error",
+   "prompt_tokens": 185
+  },
+  {
+   "index": 592,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. not prevail, because the conveyance between the investor and the friend did not effectuate a delegation of duties.",
+   "prompt_tokens": 232
+  },
+  {
+   "index": 593,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. Remove the patient from the ventilator and ventilate him with a bag-valve mask",
+   "prompt_tokens": 211
+  },
+  {
+   "index": 594,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 595,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 596,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Carl Jung",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 597,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 598,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 599,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 5 over 8",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 600,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 601,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. just.",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 602,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. It compares two means from unrelated samples",
+   "prompt_tokens": 117
+  },
+  {
+   "index": 603,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Lj",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 604,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 605,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Validity",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 606,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 174
+  },
+  {
+   "index": 607,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. ax = 0; ay < g",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 608,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. the commerce clause.",
+   "prompt_tokens": 215
+  },
+  {
+   "index": 609,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 180
+  },
+  {
+   "index": 610,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Clark Bar",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 611,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. 208/5",
+   "prompt_tokens": 114
+  },
+  {
+   "index": 612,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. implementation",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 613,
+   "correct": false,
+   "pred": null,
+   "gold": "A",
+   "response": "The total mechanical energy of a mass-spring system in the absence of friction is conserved and is the sum of the kinetic energy and the elastic potential energy.",
+   "prompt_tokens": 161
+  },
+  {
+   "index": 614,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 118
+  },
+  {
+   "index": 615,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Checks and balances",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 616,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 617,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. high self-esteem",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 618,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Jupiter",
+   "prompt_tokens": 57
+  },
+  {
+   "index": 619,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. Fat emboli",
+   "prompt_tokens": 232
+  },
+  {
+   "index": 620,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Attention to handwashing and hygiene",
+   "prompt_tokens": 75
+  },
+  {
+   "index": 621,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 622,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 56
+  },
+  {
+   "index": 623,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 78%",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 624,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. Superficial grasp of the client's unique problems",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 625,
+   "correct": false,
+   "pred": null,
+   "gold": "D",
+   "response": "We are told that 7 coins represent **5%** of Kate\u2019s entire coin collection. To find the total number of coins, we can set up a",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 626,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 138
+  },
+  {
+   "index": 627,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. the working class",
+   "prompt_tokens": 53
+  },
+  {
+   "index": 628,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. The competing ideologies of the Cold War",
+   "prompt_tokens": 284
+  },
+  {
+   "index": 629,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 630,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 631,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 632,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. provide a description of a mechanism that \"we can see, feel, understand, love, or otherwise have faith in.\"",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 633,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 92
+  },
+  {
+   "index": 634,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 635,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. Yes, because the elevator stalled due to a manufacturing defect.",
+   "prompt_tokens": 232
+  },
+  {
+   "index": 636,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. the symbolic function.",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 637,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 638,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D",
+   "prompt_tokens": 141
+  },
+  {
+   "index": 639,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. Hypomagnesemia",
+   "prompt_tokens": 267
+  },
+  {
+   "index": 640,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 57
+  },
+  {
+   "index": 641,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Insulin",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 642,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Immune complex deposition in tissues",
+   "prompt_tokens": 137
+  },
+  {
+   "index": 643,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Michael Porter",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 644,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 400
+  },
+  {
+   "index": 645,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 576
+  },
+  {
+   "index": 646,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 1 s",
+   "prompt_tokens": 99
+  },
+  {
+   "index": 647,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 133
+  },
+  {
+   "index": 648,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. those who contemplate the truth.",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 649,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. False, True",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 650,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 651,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Miriam",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 652,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Their genome RNA can be translated directly as mRNA",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 653,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 654,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. prepuce",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 655,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. both a and b.",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 656,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. Apple",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 657,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 658,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Ocean of Wisdom",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 659,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 660,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. About 6 meters",
+   "prompt_tokens": 104
+  },
+  {
+   "index": 661,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. there was no consideration.",
+   "prompt_tokens": 168
+  },
+  {
+   "index": 662,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. False, False",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 663,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 237
+  },
+  {
+   "index": 664,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. covalent network bonding",
+   "prompt_tokens": 92
+  },
+  {
+   "index": 665,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. nausea and food or drink",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 666,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 667,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 668,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 119
+  },
+  {
+   "index": 669,
+   "correct": false,
+   "pred": null,
+   "gold": "D",
+   "response": "We are given the following probabilities:\n\n- Probability of **wet weather** today: $ P(W) = 0.20 $\n- Probability of **",
+   "prompt_tokens": 172
+  },
+  {
+   "index": 670,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. 38%",
+   "prompt_tokens": 123
+  },
+  {
+   "index": 671,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 64.0 grams",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 672,
+   "correct": false,
+   "pred": null,
+   "gold": "C",
+   "response": "We are given the equation:\n\n$$\n|x - 4| - 10 = 2\n$$\n\n### Step 1: Isolate the absolute",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 673,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 674,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C.",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 675,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. catatonic schizophrenia",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 676,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 96
+  },
+  {
+   "index": 677,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 678,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 202
+  },
+  {
+   "index": 679,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Height",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 680,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 107
+  },
+  {
+   "index": 681,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. $533",
+   "prompt_tokens": 176
+  },
+  {
+   "index": 682,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 397",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 683,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. An increase in labor productivity.",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 684,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. falls below minimum average variable cost.",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 685,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. excluded, because the officer's conduct violated the man's attorney-client privilege.",
+   "prompt_tokens": 437
+  },
+  {
+   "index": 686,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 687,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 118
+  },
+  {
+   "index": 688,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. 1:9:36:84:126:126:84:36:9:1",
+   "prompt_tokens": 175
+  },
+  {
+   "index": 689,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 690,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. George Orwell's 1984",
+   "prompt_tokens": 165
+  },
+  {
+   "index": 691,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. underfitting",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 692,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 12 \u00d7 7",
+   "prompt_tokens": 122
+  },
+  {
+   "index": 693,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D. Kate Jackson",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 694,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 695,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 209
+  },
+  {
+   "index": 696,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. the value of social capital.",
+   "prompt_tokens": 157
+  },
+  {
+   "index": 697,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. Yes, because the homeowner breached the covenant of good faith and fair dealing by rejecting the cabinets without justification.",
+   "prompt_tokens": 214
+  },
+  {
+   "index": 698,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 184
+  },
+  {
+   "index": 699,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 700,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 256
+  },
+  {
+   "index": 701,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 209
+  },
+  {
+   "index": 702,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C.",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 703,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. warm.",
+   "prompt_tokens": 53
+  },
+  {
+   "index": 704,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. the pineal gland",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 705,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 706,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 707,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 708,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. A DNA sequence that replicates via an RNA intermediate",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 709,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 20,000",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 710,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 154
+  },
+  {
+   "index": 711,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Phobos and Deimos",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 712,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 89
+  },
+  {
+   "index": 713,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 211
+  },
+  {
+   "index": 714,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 715,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. subtract 20 from 180",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 716,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 717,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 206
+  },
+  {
+   "index": 718,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 719,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A.",
+   "prompt_tokens": 252
+  },
+  {
+   "index": 720,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 131
+  },
+  {
+   "index": 721,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 228
+  },
+  {
+   "index": 722,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. American desires for independence from Great Britain",
+   "prompt_tokens": 446
+  },
+  {
+   "index": 723,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 247
+  },
+  {
+   "index": 724,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Makes correct diagnoses difficult",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 725,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. fairness of procedures",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 726,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 727,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. demand characteristics",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 728,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. blue and green",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 729,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 96
+  },
+  {
+   "index": 730,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. 11,070 ppm",
+   "prompt_tokens": 206
+  },
+  {
+   "index": 731,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 300
+  },
+  {
+   "index": 732,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 733,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 734,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. $200",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 735,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Her grade will go up by 20.4 points.",
+   "prompt_tokens": 148
+  },
+  {
+   "index": 736,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Yes, because the employer's claim shares common questions of law and fact with the clerk's action.",
+   "prompt_tokens": 267
+  },
+  {
+   "index": 737,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. improper, as evidence of conduct not related to truthfulness.",
+   "prompt_tokens": 256
+  },
+  {
+   "index": 738,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 375
+  },
+  {
+   "index": 739,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 740,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. 10^29 N",
+   "prompt_tokens": 146
+  },
+  {
+   "index": 741,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. a critical period for attachment",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 742,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. Puritans",
+   "prompt_tokens": 57
+  },
+  {
+   "index": 743,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. (60\u201412)/6=a",
+   "prompt_tokens": 132
+  },
+  {
+   "index": 744,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. parasympathetic",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 745,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. The Creel Committee",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 746,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. double the magnitude and in the opposite direction",
+   "prompt_tokens": 116
+  },
+  {
+   "index": 747,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Phentolamine",
+   "prompt_tokens": 391
+  },
+  {
+   "index": 748,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. resistance.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 749,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 163
+  },
+  {
+   "index": 750,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 0.311",
+   "prompt_tokens": 89
+  },
+  {
+   "index": 751,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 752,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A.",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 753,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 754,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 755,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 177
+  },
+  {
+   "index": 756,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. Increased intensity of the murmur with forced expiration",
+   "prompt_tokens": 139
+  },
+  {
+   "index": 757,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. New York Knicks",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 758,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 424
+  },
+  {
+   "index": 759,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Self-regulating psyche, the unconscious, therapist\u2013patient relationship, stages of self-improvement",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 760,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. \u2212$27",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 761,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Myosin-actin detachment",
+   "prompt_tokens": 107
+  },
+  {
+   "index": 762,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C.",
+   "prompt_tokens": 107
+  },
+  {
+   "index": 763,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 118
+  },
+  {
+   "index": 764,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. chocolate syrup",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 765,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. surplus recession deficit expansion",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 766,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Economic, Legal, Ethical and Philanthropic",
+   "prompt_tokens": 92
+  },
+  {
+   "index": 767,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 139
+  },
+  {
+   "index": 768,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. admissible, as offered against the defendant.",
+   "prompt_tokens": 233
+  },
+  {
+   "index": 769,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 140
+  },
+  {
+   "index": 770,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 125
+  },
+  {
+   "index": 771,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Coal",
+   "prompt_tokens": 53
+  },
+  {
+   "index": 772,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. due process clause",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 773,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 774,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 775,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 776,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 777,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 160
+  },
+  {
+   "index": 778,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 129
+  },
+  {
+   "index": 779,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. False, True",
+   "prompt_tokens": 132
+  },
+  {
+   "index": 780,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 781,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 782,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 140
+  },
+  {
+   "index": 783,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. the total number of students in each teacher\u2019s class",
+   "prompt_tokens": 189
+  },
+  {
+   "index": 784,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 785,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 136
+  },
+  {
+   "index": 786,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. True, False",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 787,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. 1.25mc^2",
+   "prompt_tokens": 115
+  },
+  {
+   "index": 788,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. False sign",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 789,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 790,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. None of these",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 791,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. argument from authority",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 792,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Universal, selective, and indicative",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 793,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. (E \u2283 F) \u2228 (C \u2283 S)",
+   "prompt_tokens": 140
+  },
+  {
+   "index": 794,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. grant relief, because the primary would be proscribed by the Fifteenth Amendment.",
+   "prompt_tokens": 325
+  },
+  {
+   "index": 795,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 796,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 797,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 798,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Winner's curse.",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 799,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. Part payment of a liquidated claim would not constitute a discharge of the entire amount due.",
+   "prompt_tokens": 499
+  },
+  {
+   "index": 800,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 146
+  },
+  {
+   "index": 801,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D",
+   "prompt_tokens": 91
+  },
+  {
+   "index": 802,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 118
+  },
+  {
+   "index": 803,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D",
+   "prompt_tokens": 173
+  },
+  {
+   "index": 804,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. No, because the customer's conduct was privileged as a defense of others.",
+   "prompt_tokens": 159
+  },
+  {
+   "index": 805,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 87
+  },
+  {
+   "index": 806,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. Anal",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 807,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 343
+  },
+  {
+   "index": 808,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. 6",
+   "prompt_tokens": 116
+  },
+  {
+   "index": 809,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. level",
+   "prompt_tokens": 53
+  },
+  {
+   "index": 810,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 372
+  },
+  {
+   "index": 811,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Accomplice to robbery.",
+   "prompt_tokens": 139
+  },
+  {
+   "index": 812,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. 2,3,4",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 813,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. America's expansion to the West Coast was inevitable and divinely sanctioned.",
+   "prompt_tokens": 281
+  },
+  {
+   "index": 814,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Mutual coexistence",
+   "prompt_tokens": 248
+  },
+  {
+   "index": 815,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Charles Lyell",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 816,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Pulmonary arteries",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 817,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 818,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 819,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 135
+  },
+  {
+   "index": 820,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A.",
+   "prompt_tokens": 254
+  },
+  {
+   "index": 821,
+   "correct": false,
+   "pred": null,
+   "gold": "A",
+   "response": "We are given a **linear transformation** $ f: \\mathbb{R}^2 \\to \\mathbb{R} $, and two values",
+   "prompt_tokens": 93
+  },
+  {
+   "index": 822,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 98
+  },
+  {
+   "index": 823,
+   "correct": false,
+   "pred": null,
+   "gold": "C",
+   "response": "The volume of a **triangular prism** is calculated using the formula:\n\n$$\n\\text{Volume} = \\text{Base Area} \\times \\",
+   "prompt_tokens": 119
+  },
+  {
+   "index": 824,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. mercantilism",
+   "prompt_tokens": 433
+  },
+  {
+   "index": 825,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 6",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 826,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 491
+  },
+  {
+   "index": 827,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D. denied, because the search was incident to a lawful arrest.",
+   "prompt_tokens": 351
+  },
+  {
+   "index": 828,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. enforceable.",
+   "prompt_tokens": 286
+  },
+  {
+   "index": 829,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. $20,000 (the $45,000 contract price less the $25,000 the mason",
+   "prompt_tokens": 338
+  },
+  {
+   "index": 830,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. 1 \u00b5F",
+   "prompt_tokens": 81
+  },
+  {
+   "index": 831,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 177
+  },
+  {
+   "index": 832,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Testes",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 833,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 110
+  },
+  {
+   "index": 834,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 355
+  },
+  {
+   "index": 835,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 244
+  },
+  {
+   "index": 836,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. To make a profit",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 837,
+   "correct": false,
+   "pred": "A",
+   "gold": "B",
+   "response": "A. it is his duty not to do so.",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 838,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. I, II, and IV only",
+   "prompt_tokens": 105
+  },
+  {
+   "index": 839,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. (2x4)x6",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 840,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Steps 1 and 2 are endothermic, and step 3 is exothermic.",
+   "prompt_tokens": 179
+  },
+  {
+   "index": 841,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. an oligopoly",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 842,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. The roots of the characteristic equation must all lie outside the unit circle",
+   "prompt_tokens": 104
+  },
+  {
+   "index": 843,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. declaring bankruptcy",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 844,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 845,
+   "correct": false,
+   "pred": "D",
+   "gold": "A",
+   "response": "D. Yes, because the bank's loan modification was material.",
+   "prompt_tokens": 394
+  },
+  {
+   "index": 846,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 847,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 7",
+   "prompt_tokens": 116
+  },
+  {
+   "index": 848,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. 1,2,3,4",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 849,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 558
+  },
+  {
+   "index": 850,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 506
+  },
+  {
+   "index": 851,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 0.19",
+   "prompt_tokens": 114
+  },
+  {
+   "index": 852,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Coast Redwood",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 853,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. proportional to amplitude",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 854,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 137
+  },
+  {
+   "index": 855,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A. Current liabilities of $1,000,000; long-term liabilities of $1,050,000",
+   "prompt_tokens": 259
+  },
+  {
+   "index": 856,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. reflex",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 857,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. NH4+",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 858,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. a good will",
+   "prompt_tokens": 62
+  },
+  {
+   "index": 859,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. I and III only",
+   "prompt_tokens": 114
+  },
+  {
+   "index": 860,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. higher order to lower order",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 861,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 127
+  },
+  {
+   "index": 862,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Both a and c",
+   "prompt_tokens": 86
+  },
+  {
+   "index": 863,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. concepts of conservation",
+   "prompt_tokens": 75
+  },
+  {
+   "index": 864,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 126
+  },
+  {
+   "index": 865,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Loss of muscle strength and bone density",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 866,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. MROM",
+   "prompt_tokens": 55
+  },
+  {
+   "index": 867,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. All of these options.",
+   "prompt_tokens": 80
+  },
+  {
+   "index": 868,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 95
+  },
+  {
+   "index": 869,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 82
+  },
+  {
+   "index": 870,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 99
+  },
+  {
+   "index": 871,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Lower the discount rate risking inflation",
+   "prompt_tokens": 120
+  },
+  {
+   "index": 872,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. $4,000",
+   "prompt_tokens": 106
+  },
+  {
+   "index": 873,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Exercise and weight reduction program",
+   "prompt_tokens": 306
+  },
+  {
+   "index": 874,
+   "correct": false,
+   "pred": null,
+   "gold": "B",
+   "response": "To find the **empirical formula** of a compound, we need to determine the **simplest whole-number ratio** of the atoms of each element in the",
+   "prompt_tokens": 131
+  },
+  {
+   "index": 875,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. False, False",
+   "prompt_tokens": 143
+  },
+  {
+   "index": 876,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 295
+  },
+  {
+   "index": 877,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 91
+  },
+  {
+   "index": 878,
+   "correct": false,
+   "pred": null,
+   "gold": "A",
+   "response": "To solve the equation $ 5x - 5 = -10 $, follow these steps:\n\n1. Add 5 to both sides:\n   $",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 879,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. a thing that thinks",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 880,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. The ability to breathe oxygen",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 881,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B.",
+   "prompt_tokens": 154
+  },
+  {
+   "index": 882,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. No, because a state may not impose a tax directly on the federal government or any of its agencies or instrumentalities.",
+   "prompt_tokens": 208
+  },
+  {
+   "index": 883,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. about 4 minutes.",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 884,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. 0.261",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 885,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. O( N )",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 886,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. bitter",
+   "prompt_tokens": 54
+  },
+  {
+   "index": 887,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 122
+  },
+  {
+   "index": 888,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. slippery slope",
+   "prompt_tokens": 97
+  },
+  {
+   "index": 889,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 243
+  },
+  {
+   "index": 890,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. \u221257",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 891,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Folate, vitamins B6 and B12",
+   "prompt_tokens": 68
+  },
+  {
+   "index": 892,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Unsupervised learning",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 893,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. The wave\u2019s height has become smaller.",
+   "prompt_tokens": 143
+  },
+  {
+   "index": 894,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. $10,000",
+   "prompt_tokens": 162
+  },
+  {
+   "index": 895,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. American confidence in a time of prosperity",
+   "prompt_tokens": 329
+  },
+  {
+   "index": 896,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. The Pauli exclusion principle",
+   "prompt_tokens": 119
+  },
+  {
+   "index": 897,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Decreases \u00a0\u00a0\u00a0\u00a0 Decreases \u00a0\u00a0\u00a0\u00a0 Decreases",
+   "prompt_tokens": 114
+  },
+  {
+   "index": 898,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 899,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A.",
+   "prompt_tokens": 170
+  },
+  {
+   "index": 900,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 422
+  },
+  {
+   "index": 901,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C.",
+   "prompt_tokens": 85
+  },
+  {
+   "index": 902,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 124
+  },
+  {
+   "index": 903,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. Na2S",
+   "prompt_tokens": 74
+  },
+  {
+   "index": 904,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Internal",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 905,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. False Dilemma",
+   "prompt_tokens": 130
+  },
+  {
+   "index": 906,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. smooth muscle and respiratory epithelium.",
+   "prompt_tokens": 75
+  },
+  {
+   "index": 907,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. True, True",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 908,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. Affirm the decision on the merits with respect to the federal constitutional issue and abstain from reviewing the state constitutional issue.",
+   "prompt_tokens": 433
+  },
+  {
+   "index": 909,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. antisocial personality disorder",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 910,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Internet advertising.",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 911,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 310
+  },
+  {
+   "index": 912,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 509
+  },
+  {
+   "index": 913,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Yes, since we know the cart is slowing down, its momentum change is opposite the direction of movement, and the net force is in the direction of",
+   "prompt_tokens": 200
+  },
+  {
+   "index": 914,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 915,
+   "correct": false,
+   "pred": "C",
+   "gold": "D",
+   "response": "C. 7.92",
+   "prompt_tokens": 112
+  },
+  {
+   "index": 916,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 214
+  },
+  {
+   "index": 917,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. twice as much",
+   "prompt_tokens": 66
+  },
+  {
+   "index": 918,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. a monopsony buys from a monopoly",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 919,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. (i), (ii), (iii), and (iv)",
+   "prompt_tokens": 219
+  },
+  {
+   "index": 920,
+   "correct": false,
+   "pred": "B",
+   "gold": "A",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 131
+  },
+  {
+   "index": 921,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. must be applied to everyone alike in the absence of morally relevant differences.",
+   "prompt_tokens": 78
+  },
+  {
+   "index": 922,
+   "correct": false,
+   "pred": "A",
+   "gold": "C",
+   "response": "A.",
+   "prompt_tokens": 207
+  },
+  {
+   "index": 923,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D",
+   "prompt_tokens": 187
+  },
+  {
+   "index": 924,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. disorganized/disoriented",
+   "prompt_tokens": 70
+  },
+  {
+   "index": 925,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Neither assault nor battery.",
+   "prompt_tokens": 350
+  },
+  {
+   "index": 926,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 88
+  },
+  {
+   "index": 927,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 135
+  },
+  {
+   "index": 928,
+   "correct": false,
+   "pred": "B",
+   "gold": "D",
+   "response": "B. 6 electrons on the right",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 929,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 3-6 years",
+   "prompt_tokens": 90
+  },
+  {
+   "index": 930,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 931,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Public relations.",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 932,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. I and III",
+   "prompt_tokens": 71
+  },
+  {
+   "index": 933,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. fall and taxes rise.",
+   "prompt_tokens": 69
+  },
+  {
+   "index": 934,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B",
+   "prompt_tokens": 76
+  },
+  {
+   "index": 935,
+   "correct": false,
+   "pred": null,
+   "gold": "D",
+   "response": "To find the probability that Semir will be **on time** for school on any given day, we need to use the **law of total probability**.\n\n",
+   "prompt_tokens": 172
+  },
+  {
+   "index": 936,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 134
+  },
+  {
+   "index": 937,
+   "correct": false,
+   "pred": null,
+   "gold": "B",
+   "response": "To find how many feet of fencing Mr. Fuller needs, we calculate the **perimeter** of the rectangular yard.\n\nThe formula for the perimeter $ P $",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 938,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 544
+  },
+  {
+   "index": 939,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 940,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. made and used spears with stone projectile points for hunting 500,000 years ago.",
+   "prompt_tokens": 139
+  },
+  {
+   "index": 941,
+   "correct": false,
+   "pred": "B",
+   "gold": "C",
+   "response": "B. Verify the existence of option holders in the issuer's payroll and human resources records.",
+   "prompt_tokens": 119
+  },
+  {
+   "index": 942,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. 10/11 c",
+   "prompt_tokens": 123
+  },
+  {
+   "index": 943,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 944,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. contact child protective services",
+   "prompt_tokens": 152
+  },
+  {
+   "index": 945,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. materialism",
+   "prompt_tokens": 258
+  },
+  {
+   "index": 946,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 1.5 m/s",
+   "prompt_tokens": 117
+  },
+  {
+   "index": 947,
+   "correct": false,
+   "pred": "D",
+   "gold": "B",
+   "response": "D. False, True",
+   "prompt_tokens": 102
+  },
+  {
+   "index": 948,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 949,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D. $80,000, because the contractor reasonably relied to his detriment on the electrician's bid in formulating his job estimate.",
+   "prompt_tokens": 448
+  },
+  {
+   "index": 950,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. 46",
+   "prompt_tokens": 60
+  },
+  {
+   "index": 951,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Mit'a",
+   "prompt_tokens": 73
+  },
+  {
+   "index": 952,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 136
+  },
+  {
+   "index": 953,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 954,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 955,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 104
+  },
+  {
+   "index": 956,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. (i), (ii), and (iii) only",
+   "prompt_tokens": 163
+  },
+  {
+   "index": 957,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 958,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. chimpanzees",
+   "prompt_tokens": 59
+  },
+  {
+   "index": 959,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. brain lesions",
+   "prompt_tokens": 65
+  },
+  {
+   "index": 960,
+   "correct": false,
+   "pred": "C",
+   "gold": "A",
+   "response": "C. Not wrong, Wrong",
+   "prompt_tokens": 132
+  },
+  {
+   "index": 961,
+   "correct": false,
+   "pred": "D",
+   "gold": "C",
+   "response": "D. emotion.",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 962,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 83
+  },
+  {
+   "index": 963,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 77
+  },
+  {
+   "index": 964,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 273
+  },
+  {
+   "index": 965,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 329
+  },
+  {
+   "index": 966,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. HTTP",
+   "prompt_tokens": 61
+  },
+  {
+   "index": 967,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Wireshark",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 968,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. the engineer.",
+   "prompt_tokens": 279
+  },
+  {
+   "index": 969,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A",
+   "prompt_tokens": 67
+  },
+  {
+   "index": 970,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Ratio Data is an interval data with an absolute zero",
+   "prompt_tokens": 125
+  },
+  {
+   "index": 971,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C",
+   "prompt_tokens": 72
+  },
+  {
+   "index": 972,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Wrong, Wrong",
+   "prompt_tokens": 128
+  },
+  {
+   "index": 973,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. contact the client first to inform her of your intent to use a collection agency if she does not pay her outstanding fees by a specific date.",
+   "prompt_tokens": 162
+  },
+  {
+   "index": 974,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 975,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Firms produce a homogeneous product.",
+   "prompt_tokens": 84
+  },
+  {
+   "index": 976,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A. Overstated Understated",
+   "prompt_tokens": 133
+  },
+  {
+   "index": 977,
+   "correct": false,
+   "pred": "C",
+   "gold": "B",
+   "response": "C. PAL",
+   "prompt_tokens": 64
+  },
+  {
+   "index": 978,
+   "correct": false,
+   "pred": null,
+   "gold": "D",
+   "response": "We are given the equation:\n\n$$\n(x - p)(x - q) = (r - p)(r - q)\n$$\n\nWe are told that",
+   "prompt_tokens": 108
+  },
+  {
+   "index": 979,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 402
+  },
+  {
+   "index": 980,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 101
+  },
+  {
+   "index": 981,
+   "correct": false,
+   "pred": null,
+   "gold": "B",
+   "response": "To find the product of the polynomials $ f(x) = 4x - 5 $ and $ g(x) = 2x^2 -",
+   "prompt_tokens": 114
+  },
+  {
+   "index": 982,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D.",
+   "prompt_tokens": 94
+  },
+  {
+   "index": 983,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A.",
+   "prompt_tokens": 99
+  },
+  {
+   "index": 984,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. Wrong, Not wrong",
+   "prompt_tokens": 120
+  },
+  {
+   "index": 985,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. All of the options given are correct",
+   "prompt_tokens": 143
+  },
+  {
+   "index": 986,
+   "correct": false,
+   "pred": "A",
+   "gold": "D",
+   "response": "A.",
+   "prompt_tokens": 270
+  },
+  {
+   "index": 987,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 123
+  },
+  {
+   "index": 988,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. centromeres.",
+   "prompt_tokens": 63
+  },
+  {
+   "index": 989,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. yellow-green",
+   "prompt_tokens": 57
+  },
+  {
+   "index": 990,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. Continuous humidified oxygen",
+   "prompt_tokens": 347
+  },
+  {
+   "index": 991,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C. states' rights",
+   "prompt_tokens": 165
+  },
+  {
+   "index": 992,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. The demand for daycare rises, increasing the market price.",
+   "prompt_tokens": 121
+  },
+  {
+   "index": 993,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D. Left tube thoracostomy",
+   "prompt_tokens": 201
+  },
+  {
+   "index": 994,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B.",
+   "prompt_tokens": 248
+  },
+  {
+   "index": 995,
+   "correct": true,
+   "pred": "A",
+   "gold": "A",
+   "response": "A. Yes",
+   "prompt_tokens": 58
+  },
+  {
+   "index": 996,
+   "correct": true,
+   "pred": "C",
+   "gold": "C",
+   "response": "C.",
+   "prompt_tokens": 79
+  },
+  {
+   "index": 997,
+   "correct": true,
+   "pred": "B",
+   "gold": "B",
+   "response": "B. 0.60c",
+   "prompt_tokens": 100
+  },
+  {
+   "index": 998,
+   "correct": true,
+   "pred": "D",
+   "gold": "D",
+   "response": "D",
+   "prompt_tokens": 103
+  },
+  {
+   "index": 999,
+   "correct": false,
+   "pred": null,
+   "gold": "C",
+   "response": "We are given two curves:\n\n- $ y_1 = (\\sin x + \\cos x)^4 $\n- $ y_2 = (\\sin x -",
+   "prompt_tokens": 111
+  }
+ ]
+}

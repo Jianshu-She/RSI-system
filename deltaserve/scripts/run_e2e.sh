@@ -6,7 +6,7 @@
 #   C  co-serving     : the same traffic as A while the LoRA trains in the gaps   -> latency under training; final/ adapter
 #   D  eval           : the exported adapter with the ACE protocol (stock vLLM 0.31 on EVAL_GPU) + paired test vs base
 # Usage (on an 8-GPU node, after setup.sh):   bash deltaserve/scripts/run_e2e.sh [run_name]
-# Knobs (env): RPS (0.5)  B_CONCURRENCY (16)  DS_GPUS (0,1,2,3)  EVAL_GPU (4)  PLAYBOOK  SKIP_BASE_EVAL=1
+# Knobs (env): RPS (0.5)  B_CONCURRENCY (16)  DS_GPUS (0,1,2,3)  EVAL_GPU (4)  PLAYBOOK  SKIP_BASE_EVAL=1  SKIP_EVAL=1 (no phase D)
 set -u
 source "$(dirname "$(readlink -f "$0")")/../env.sh"; ds_activate
 RUN=$DS_WORK/runs/${1:-e2e_$(date +%Y%m%d_%H%M%S)}; mkdir -p $RUN; rm -rf $RUN/adapters
@@ -48,6 +48,7 @@ SPID=$(pgrep -f "dserve-vllm serve.*$RUN/bwd.csv" | head -1)
 kill -INT -$L ${SPID:+-$SPID} 2>/dev/null; sleep 30; kill -KILL -$L ${SPID:+-$SPID} 2>/dev/null
 T "server stopped"
 
+[ -n "${SKIP_EVAL:-}" ] && { python3 $DS_HOME/scripts/summarize.py $RUN | tee $RUN/summary.txt; T "done (SKIP_EVAL): $RUN"; exit 0; }
 T "D: evaluate (ACE protocol, GPU $EVAL_GPU)"
 bash $DS_HOME/scripts/eval_adapter.sh $EVAL_GPU 9334 formula rsi $RUN/eval $RUN/adapters/final | tee -a $RUN/driver.log
 [ -z "${SKIP_BASE_EVAL:-}" ] && bash $DS_HOME/scripts/eval_adapter.sh $EVAL_GPU 9335 formula base $RUN/eval | tee -a $RUN/driver.log

@@ -1,0 +1,332 @@
+{
+ "task": "formula",
+ "split": "test",
+ "context": "/mnt/weka/home/jianshu.she/.cache/rsi-push/RSI-system/deltaserve/configs/empty_context.txt",
+ "model": "qwen3-32b",
+ "results": {
+  "accuracy": 0.685,
+  "correct": 137,
+  "total": 200,
+  "no_answer": 0
+ },
+ "errors": {
+  "accuracy": 0.685,
+  "errors": [
+   {
+    "index": 14,
+    "prediction": "0.48",
+    "ground_truth": "0.47"
+   },
+   {
+    "index": 2,
+    "prediction": "5.00",
+    "ground_truth": "0.05"
+   },
+   {
+    "index": 11,
+    "prediction": "6.00",
+    "ground_truth": "0.06"
+   },
+   {
+    "index": 3,
+    "prediction": "18.44",
+    "ground_truth": "18.45"
+   },
+   {
+    "index": 15,
+    "prediction": "2.2",
+    "ground_truth": "0.02"
+   },
+   {
+    "index": 19,
+    "prediction": "82211.18",
+    "ground_truth": "89606.94"
+   },
+   {
+    "index": 6,
+    "prediction": "637.05",
+    "ground_truth": "637.07"
+   },
+   {
+    "index": 30,
+    "prediction": "300.00",
+    "ground_truth": "3.0"
+   },
+   {
+    "index": 29,
+    "prediction": "The call option (C) and put option (P) prices cannot be determined with the given information.",
+    "ground_truth": "18.45"
+   },
+   {
+    "index": 28,
+    "prediction": "37146.0",
+    "ground_truth": "37161.62"
+   },
+   {
+    "index": 33,
+    "prediction": "16.00",
+    "ground_truth": "0.16"
+   },
+   {
+    "index": 7,
+    "prediction": "10652.58",
+    "ground_truth": "11717.85"
+   },
+   {
+    "index": 34,
+    "prediction": "1.79",
+    "ground_truth": "94.29"
+   },
+   {
+    "index": 40,
+    "prediction": "0.08",
+    "ground_truth": "0.07"
+   },
+   {
+    "index": 32,
+    "prediction": "35835.58",
+    "ground_truth": "35835.68"
+   },
+   {
+    "index": 42,
+    "prediction": "147645.45",
+    "ground_truth": "147651.39"
+   },
+   {
+    "index": 52,
+    "prediction": "5.00",
+    "ground_truth": "0.05"
+   },
+   {
+    "index": 60,
+    "prediction": "10.00",
+    "ground_truth": "0.1"
+   },
+   {
+    "index": 37,
+    "prediction": "The call option price increases by $0.37 and the put option price decreases by $0.37.",
+    "ground_truth": "18.45"
+   },
+   {
+    "index": 61,
+    "prediction": "300.00",
+    "ground_truth": "3.0"
+   },
+   {
+    "index": 57,
+    "prediction": "70.40",
+    "ground_truth": "69.49"
+   },
+   {
+    "index": 64,
+    "prediction": "4250.0",
+    "ground_truth": "4250000000000.0"
+   },
+   {
+    "index": 70,
+    "prediction": "100000000.0",
+    "ground_truth": "-100000000.0"
+   },
+   {
+    "index": 55,
+    "prediction": "974.48",
+    "ground_truth": "15092.44"
+   },
+   {
+    "index": 83,
+    "prediction": "1520.0",
+    "ground_truth": "1520000000000.0"
+   },
+   {
+    "index": 84,
+    "prediction": "The unemployment rate will decrease, but the exact value cannot be determined with the given information.",
+    "ground_truth": "0.0"
+   },
+   {
+    "index": 68,
+    "prediction": "18738.05",
+    "ground_truth": "18761.26"
+   },
+   {
+    "index": 87,
+    "prediction": "136842.11",
+    "ground_truth": "2600000.0"
+   },
+   {
+    "index": 79,
+    "prediction": "0.02",
+    "ground_truth": "0.08"
+   },
+   {
+    "index": 93,
+    "prediction": "3.00",
+    "ground_truth": "0.03"
+   },
+   {
+    "index": 96,
+    "prediction": "0.1157",
+    "ground_truth": "0.12"
+   },
+   {
+    "index": 109,
+    "prediction": "21.0",
+    "ground_truth": "21000000000.0"
+   },
+   {
+    "index": 104,
+    "prediction": "9.69",
+    "ground_truth": "0.1"
+   },
+   {
+    "index": 105,
+    "prediction": "2.16",
+    "ground_truth": "0.02"
+   },
+   {
+    "index": 103,
+    "prediction": "4.0",
+    "ground_truth": "0.04"
+   },
+   {
+    "index": 122,
+    "prediction": "125487.34",
+    "ground_truth": "125482.47"
+   },
+   {
+    "index": 119,
+    "prediction": "34.07",
+    "ground_truth": "0.34"
+   },
+   {
+    "index": 124,
+    "prediction": "0.8",
+    "ground_truth": "0.01"
+   },
+   {
+    "index": 139,
+    "prediction": "0.07",
+    "ground_truth": "6.67"
+   },
+   {
+    "index": 136,
+    "prediction": "0.0564",
+    "ground_truth": "0.06"
+   },
+   {
+    "index": 156,
+    "prediction": "3.0",
+    "ground_truth": "0.03"
+   },
+   {
+    "index": 146,
+    "prediction": "500.0",
+    "ground_truth": "-1499.76"
+   },
+   {
+    "index": 142,
+    "prediction": "10760.89",
+    "ground_truth": "7600.0"
+   },
+   {
+    "index": 148,
+    "prediction": "26.5",
+    "ground_truth": "0.27"
+   },
+   {
+    "index": 147,
+    "prediction": "13.18",
+    "ground_truth": "0.13"
+   },
+   {
+    "index": 157,
+    "prediction": "17.45",
+    "ground_truth": "0.17"
+   },
+   {
+    "index": 162,
+    "prediction": "300.00",
+    "ground_truth": "3.0"
+   },
+   {
+    "index": 167,
+    "prediction": "371.71",
+    "ground_truth": "2297.17"
+   },
+   {
+    "index": 165,
+    "prediction": "36.07",
+    "ground_truth": "35.71"
+   },
+   {
+    "index": 158,
+    "prediction": "0.08",
+    "ground_truth": "0.07"
+   },
+   {
+    "index": 178,
+    "prediction": "The question cannot be answered with the given information.",
+    "ground_truth": "107.61"
+   },
+   {
+    "index": 174,
+    "prediction": "-2.0",
+    "ground_truth": "-0.02"
+   },
+   {
+    "index": 161,
+    "prediction": "0.1045",
+    "ground_truth": "0.1"
+   },
+   {
+    "index": 183,
+    "prediction": "23567.0",
+    "ground_truth": "23566.95"
+   },
+   {
+    "index": 152,
+    "prediction": "66666.67",
+    "ground_truth": "9615.38"
+   },
+   {
+    "index": 187,
+    "prediction": "51.10",
+    "ground_truth": "0.51"
+   },
+   {
+    "index": 182,
+    "prediction": "31.94",
+    "ground_truth": "0.32"
+   },
+   {
+    "index": 197,
+    "prediction": "154629.66",
+    "ground_truth": "133735.27"
+   },
+   {
+    "index": 190,
+    "prediction": "0.0302",
+    "ground_truth": "0.03"
+   },
+   {
+    "index": 196,
+    "prediction": "10.23",
+    "ground_truth": "6.9"
+   },
+   {
+    "index": 191,
+    "prediction": "14.25",
+    "ground_truth": "10.61"
+   },
+   {
+    "index": 159,
+    "prediction": "1.30",
+    "ground_truth": "1.64"
+   },
+   {
+    "index": 173,
+    "prediction": "13.45",
+    "ground_truth": "14.14"
+   }
+  ]
+ }
+}

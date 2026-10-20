@@ -118,6 +118,17 @@ python3 deltaserve/scripts/compare.py deltaserve/work/runs/my_run/eval formula b
 Knobs (environment): `RPS` (0.5), `B_CONCURRENCY` (16), `DS_GPUS` (0,1,2,3), `EVAL_GPU` (4), `DS_PORT` (8000),
 `PLAYBOOK`, `SKIP_BASE_EVAL=1`. The training recipe and SLOs are in `configs/coserve_e2e.yaml`.
 
+### Paper metrics (LoRA vs skills in context)
+```bash
+bash deltaserve/scripts/paper_run.sh paper1        # ~65 min on 8 GPUs: the loop + 16 evals + serving cost + leakage + GPU util
+bash deltaserve/scripts/paper_run_cost2.sh paper1  # ~50 min: merged LoRA, fresh-prompt 4 rps, no-prefix-cache serving cost
+cat deltaserve/work/runs/paper1/paper_metrics.md   # every table (scripts/paper_metrics.py)
+```
+What each part measures and the results: [results/RESULTS.md §3](results/RESULTS.md). Scripts: `eval_suite.sh`
+(one vLLM server, {bench}:{empty|skills} evals), `eval_general.py` (GSM8K / MMLU), `serving_cost.sh` (TTFT/TBT/KV per
+condition), `scrape_metrics.py` (vLLM /metrics at 1 Hz), `gpu_monitor.sh` (DCGM SM-active at 1 Hz),
+`leak_probe.py` (prompt extraction), `merge_lora.py`.
+
 ### Other entry points
 ```bash
 bash deltaserve/scripts/run_train.sh $ACE_SFT_DIR/data_v2/formula.jsonl          # DeltaServe as a trainer, no traffic

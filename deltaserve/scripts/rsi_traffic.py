@@ -1,7 +1,8 @@
 """ACE Finance "user traffic" against an OpenAI-compatible server, with traces.
 
 Builds each request exactly like ACE's Generator (GENERATOR_PROMPT, temperature 0, thinking off),
-streams it to measure TTFT / end-to-end latency, and scores it with ACE's own extract_answer +
+streams it to measure TTFT / TBT (gaps between streamed chunks) / end-to-end latency and the server-side token
+counts (prompt / completion), and scores it with ACE's own extract_answer +
 DataProcessor.answer_is_correct. One JSONL record per request: the full prompt + response (the
 trace), correctness, and timing. Run with the ACE venv python from the ACE upstream dir:
 
@@ -37,16 +38,21 @@ async def one(client, args, proc, playbook, i, s, out, lock, stats):
     prompt = GENERATOR_PROMPT.format(playbook, "(empty)", s["question"], s["context"])
     t0 = time.time()
     ttft = None
-    parts = []
+    parts, t_chunks, usage = [], [], None
     try:
         stream = await client.chat.completions.create(
             model=args.model, messages=[{"role": "user", "content": prompt}],
             temperature=0.0, max_tokens=args.max_tokens, stream=True,
+            stream_options={"include_usage": True},
             extra_body={"chat_template_kwargs": {"enable_thinking": False}})
         async for ch in stream:
+            if ch.usage:
+                usage = ch.usage
             if ch.choices and ch.choices[0].delta.content:
+                now = time.time()
                 if ttft is None:
-                    ttft = time.time() - t0
+                    ttft = now - t0
+                t_chunks.append(now)
                 parts.append(ch.choices[0].delta.content)
         err = None
     except Exception as e:  # keep the run alive; the record says what failed
@@ -55,8 +61,12 @@ async def one(client, args, proc, playbook, i, s, out, lock, stats):
     resp = "".join(parts)
     ans = extract_answer(resp) if resp else None
     correct = bool(resp) and proc.answer_is_correct(ans, s["target"])
+    gaps = [b - a for a, b in zip(t_chunks, t_chunks[1:])]
     rec = {"index": i, "task": args.task, "split": args.split, "t_send": t0, "ttft": ttft,
-           "e2e": e2e, "correct": correct, "error": err, "prompt": prompt, "response": resp,
+           "e2e": e2e, "tbt_mean": sum(gaps) / len(gaps) if gaps else None, "tbt_max": max(gaps) if gaps else None,
+           "tbt_gaps": [round(g, 5) for g in gaps] if args.save_gaps else None,
+           "prompt_tokens": usage.prompt_tokens if usage else None,
+           "completion_tokens": usage.completion_tokens if usage else None, "correct": correct, "error": err, "prompt": prompt, "response": resp,
            "question": s["question"], "context": s["context"], "target": s["target"]}
     async with lock:
         out.write(json.dumps(rec) + "\n")
@@ -80,6 +90,7 @@ async def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--max-tokens", type=int, default=4096)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--save-gaps", type=int, default=1, help="store every inter-chunk gap (for TBT percentiles)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     proc, samples = load_samples(args.task, args.split)
