@@ -152,6 +152,97 @@ model emits it too.
 - A LoRA moves the experience into the weights: zero context and KV cost, nothing extractable from the prompt.
   That holds for skills learned from this kind of loop.
 
+## 4. Sequential vs co-serving on a coding-agent workload (TraceLab; `scripts/agent_*`; `agent1_2026-10-20/`)
+
+**Question:** two jobs share 4× H200 (Qwen3-32B, TP=4):
+- the agent traffic, and
+- a LoRA FT job: the paper-1 loop's 427 correct trajectories × 4 epochs = 1.05M tokens.
+
+Should they run disaggregated in time (serve, then train) or co-served on one DeltaServe server? How long does each
+take to complete?
+
+**Workload** (`agent_trace.py`; sessions are real Claude Code sessions from the TraceLab trace, [arXiv:2606.30560](https://arxiv.org/abs/2606.30560), [uw-syfi/TraceLab](https://github.com/uw-syfi/TraceLab) v0.0.1):
+- 48 sessions sampled from 2,510, seed 0. Poisson arrivals at 0.05/s.
+- 900 LLM rounds, 83 user tasks; each session cut at 4 tasks / 80 rounds.
+- Per round, from the trace:
+  - appended tokens, ×1/8 (p50/p90 141/918);
+  - output tokens (p50/p90 184/1,115);
+  - tool latency before a tool-initiated round (p50 0.09 s, p99 182 s);
+  - human think time before a user round (p50 129 s).
+  - Both gaps are capped at 300 s.
+- The ×1/8 makes TraceLab's 100K+-token contexts fit the 40K window. The 300 s cap is because 1–2 h gaps are a
+  person away.
+- Replay (`agent_replay.py`):
+  - Closed loop per session over a running context: a shared 2K system block plus history, with the output re-sent
+    as input.
+  - Synthetic token ids and forced output length.
+  - Auto-compaction to 4K at 36,864 tokens (15 compactions).
+- **Task completion** = from sending a user message to the end of the last LLM round of its tool loop. The tool and
+  human waits are the trace's, identical in every mode.
+
+**Runs** (`agent_run.sh`):
+- `inf`: stock vLLM 0.31, gpu_memory_utilization 0.90 (KV 1.76M tokens).
+- `ft`: DeltaServe, no traffic.
+- `co`: DeltaServe (KV 562K tokens). The traffic and the FT job both start at t=0.
+- Sequential = inf + ft.
+
+### 4.1 Completion times
+
+| | both jobs done | FT job done | agent task completion p50 / p90 / p99 |
+|---|---|---|---|
+| sequential: serve, then train | 2,386 s | 2,386 s | 38.9 / 272 / 905 s |
+| sequential: train, then serve | 2,386 s | 255 s | 42.3 / 354 / 922 s (tasks arriving during FT wait) |
+| **co-serving** | **2,161 s (0.91×)** | 1,612 s | 46.6 / 306 / 936 s (**+20 %** p50) |
+
+### 4.2 Detail
+
+| | inference only | co-serving |
+|---|---|---|
+| rounds / errors / compactions | 900 / 0 / 15 | 900 / 0 / 15 |
+| replay makespan | 2,130 s | 2,160 s |
+| task LLM time p50 / p90 / p99 (excl. tool/human waits) | 20.1 / 107 / 181 s | 23.9 / 130 / 214 s (+19 %) |
+| round latency p50 / p90 / p99 | 1.65 / 9.4 / 33.0 s | 2.00 / 11.4 / 40.2 s |
+| TTFT p50 / p90 / p99 | 152 / 328 / 959 ms | 179 / 376 / 1,130 ms |
+| TBT (per-round mean) p50 / p99 | 8 / 16 ms | 10 / 23 ms |
+| GPU SM_ACTIVE (DCGM, replay window) | 33.4 % | 36.4 % |
+| wall time with no request in flight | 35 % | 30 % |
+
+| FT job | alone | co-serving |
+|---|---|---|
+| time / throughput | 255 s / 4,122 tok/s | 1,612 s / 653 tok/s (16 % of alone) |
+| loss first → last | 0.523 → 0.054 | 0.523 → 0.053 (same 68 cycles) |
+| FT-only forwards aborted by an arrival (tier C) | — | 43 (≈ 0.36M token-equivalents of discarded forward) |
+
+### 4.3 Reading
+
+- **Co-serving finishes both jobs 225 s (9 %) sooner.**
+  - The FT job completes inside the agent traffic, and the traffic itself runs only 30 s longer.
+  - The saving is bounded by the FT job's standalone time (255 s). A job that big is small next to 36 minutes of
+    agent traffic.
+  - The saving grows with the training job: with 9.4M tokens it would be up to ~38 min of training hidden in the
+    gaps. That is not measured here.
+- **The agent pays for it: +20 % task completion at p50, +19 % LLM time per task.**
+  - The causes are the backward child time-slicing with decode steps (TBT +25 %) and the 3× smaller KV pool.
+  - It fails the agent-1 criteria: makespan ≤ 0.8× and task p50 ≤ +10 %.
+- **The gaps are there, but DeltaServe does not use them well on agent traffic.**
+  - The GPU is idle most of the time: SM_ACTIVE 33 %, and 35 % of wall time has no request at all.
+  - Still, co-serving trains at only 16 % of its standalone rate.
+  - The traffic arrives as fine-grained bursts: tool waits are p50 0.09 s, and a task is a chain of ~11 rounds.
+  - A 16K-token FT-only forward (≈ 2–3 s) is aborted by the next arrival and re-run from scratch. Training stalled
+    for 9 minutes at peak load (11:28–11:37).
+  - The obvious fixes are smaller FT forwards in fragmented gaps, keeping the partial forward instead of discarding
+    it, and letting FT ride inference prefills. They are untested.
+- **Train-then-serve** gives the FT result fastest (255 s), but every session that arrives meanwhile waits: p90 task
+  completion rises from 272 to 354 s.
+
+Caveats:
+- One run per mode.
+- `inf` is stock vLLM 0.31 while `co`/`ft` are the DeltaServe fork (v0.21). The DeltaServe fork with finetuning off
+  died on this workload with a flash-attn illegal memory access (`inf_fork_crashed/error_excerpt.txt`; open bug).
+  The newer engine may be faster, so the +20 % may overstate co-serving's cost relative to the fork serving alone.
+- `co` and `ft`/`inf` ran on the same node at the same time, on disjoint GPUs.
+- Token lengths are scaled ×1/8 and gaps are capped, so absolute times are not TraceLab's.
+
 ## Caveats
 
 - Single runs, temperature 0. Differences below ~3 points (n=200) are noise.

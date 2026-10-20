@@ -129,6 +129,19 @@ What each part measures and the results: [results/RESULTS.md §3](results/RESULT
 condition), `scrape_metrics.py` (vLLM /metrics at 1 Hz), `gpu_monitor.sh` (DCGM SM-active at 1 Hz),
 `leak_probe.py` (prompt extraction), `merge_lora.py`.
 
+### Sequential vs co-serving on a coding-agent workload (TraceLab)
+```bash
+# workload: real Claude Code sessions from the TraceLab trace (download the DuckDB from github.com/uw-syfi/TraceLab releases)
+python deltaserve/scripts/agent_trace.py --db syfi_coding_trace.duckdb --sessions 48 --rate 0.05 --out deltaserve/work/agent/agent_workload.json  # needs duckdb
+export WORKLOAD=$PWD/deltaserve/work/agent/agent_workload.json DATA=<sft.jsonl> EPOCHS=4
+bash deltaserve/scripts/agent_run.sh co  0,1,2,3 8000 deltaserve/work/runs/agent1/co    # traffic + FT job on one server
+DSERVE_BACKWARD_NCCL_PORT=29777 bash deltaserve/scripts/agent_run.sh ft 4,5,6,7 8100 deltaserve/work/runs/agent1/ft
+bash deltaserve/scripts/agent_run.sh inf 4,5,6,7 8100 deltaserve/work/runs/agent1/inf   # stock vLLM, traffic only
+python3 deltaserve/scripts/agent_metrics.py deltaserve/work/runs/agent1                  # -> agent_metrics.md
+```
+Two DeltaServe servers on one node need different `DSERVE_BACKWARD_NCCL_PORT`s. Results:
+[results/RESULTS.md §4](results/RESULTS.md).
+
 ### Other entry points
 ```bash
 bash deltaserve/scripts/run_train.sh $ACE_SFT_DIR/data_v2/formula.jsonl          # DeltaServe as a trainer, no traffic

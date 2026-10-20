@@ -249,3 +249,237 @@
   - D: **74.5 %** vs base 66.5 % on the same eval engine (+24/−8, p = 0.007).
   - Audit: the co-serving tail varies run to run (p99 725 → 217 ms). The base moves ~1.5 points between evals at temp 0.
 - **Decision:** publish `RSI-system/deltaserve/` with both runs in results/RESULTS.md.
+
+### paper-1 — paper metrics on the RSI loop: LoRA vs skills-in-context (accuracy, context, KV, TTFT/TBT, GPU util, leakage, general ability)   (2026-10-19, fs-mbz-gpu-198 ×8, job 2721371)
+- **Reflection / audit:**
+  - Done so far: rsi-e2e-1/2 showed the loop works. Self-generated traces → LoRA trained in the gaps → formula
+    68 → 75 / 66.5 → 74.5 (p < 0.01). Co-serving SLO was 96.6 / 99.1 %.
+  - Missing for the paper (the user's list):
+    1. Is LoRA + skills > skills?
+    2. How much context, KV cache and TTFT/TBT do skills cost versus a LoRA?
+    3. Does co-serving raise GPU utilization?
+    4. Can skills / user data leak out of the prompt, and does the LoRA remove that?
+    5. Does distilled experience (or a pile of skills in context) hurt general ability?
+  - None of these was measured. The earlier runs evaluated only {base, LoRA} with an EMPTY playbook. They had no
+    TBT, no KV numbers and no GPU utilization.
+  - Why now: same loop, same code, plus instruments. One run on one node gives every number from one adapter.
+- **Goal / criteria (what each number answers):**
+  - H1, "LoRA+skills > skills": formula test, 2×2 {base, rsi} × {empty, skills = the ACE best playbook}. Paired sign
+    test rsi_skills vs base_skills.
+  - H2, context / KV / latency (stock vLLM 0.31, TP=4, GPUs 0-3, the same formula test traffic at 1 and 4 rps):
+    - skills = base + playbook in the prompt; lora = adapter + "(empty)".
+    - Per request: prompt tokens, TTFT, TBT (inter-chunk gaps), E2E.
+    - Per second: vLLM KV-cache usage, running/waiting, prefix-cache hits.
+    - Also the KV pool size → max concurrency.
+  - H3, GPU utilization: DCGM SM_ACTIVE (1002) at 1 Hz on GPUs 0-3, DeltaServe phase A (inference only) vs phase C
+    (co-serving), same traffic.
+  - H4, leakage: 12 prompt-extraction attacks in the deployment's own prompt. Measure the fraction of the playbook's
+    282 bullets leaked by id, and verbatim (LCS ≥ min(60 chars, 50 %)). Compare skills deployment vs LoRA deployment
+    vs base (control).
+  - H5, general ability: on {base, rsi} × {empty, skills}, score:
+    - FiNER test: the other finance task; the LoRA never saw it, and the formula playbook is "irrelevant skills" there.
+    - GSM8K test (1319).
+    - MMLU (1000 of all/test, seed 0).
+- **Command:** `srun --jobid 2721371 --overlap bash deltaserve/scripts/paper_run.sh paper1` (RSI-system).
+  - It runs `run_e2e.sh` with SKIP_EVAL=1 on GPUs 0-3. The DeltaServe config is unchanged from rsi-e2e-2
+    (configs/coserve_e2e.yaml: LoRA q,k,v,o r16 α32, lr 1e-4 const, 2 epochs, 16K tok/step, ace loss spans,
+    0.5 rps traffic).
+  - `eval_suite.sh`: base on GPUs 4,5 during the e2e; rsi on 6,7 afterwards. Uses stock vLLM 0.31, TP=1, temp 0,
+    prefix cache on.
+  - `serving_cost.sh` on GPUs 0-3 after the e2e. RATES = "1 4".
+  - `gpu_monitor.sh` (dcgmi dmon -e 155,203,252,1002,1003,1004) runs throughout.
+- **Data:**
+  - Formula train 500 (traffic B → SFT rows), formula test 200, FiNER test.
+  - GSM8K test 1319, MMLU 1000.
+  - Playbook = ACE formula offline+GT best_playbook.txt (282 bullets, ~29.7K tokens).
+  - Leak check: the adapter is trained only on formula TRAIN traces; every accuracy number is on test splits / other
+    benchmarks.
+- **Predicted (committed before the run):**
+  - H1:
+    - base_empty ≈ 67, rsi_empty ≈ 74-75.
+    - base_skills ≈ 74-78; rsi_skills ≥ base_skills by +1-3. That gap is inside noise for n=200, so H1 likely
+      needs p < 0.05 to be claimed.
+    - FAIL if rsi_skills < base_skills − 3.
+  - H2:
+    - Prompt tokens ≈ 30.1K vs ≈ 0.4K (~75×).
+    - With a warm prefix cache: skills TTFT p50 ≈ 2-4× lora's; TBT 1.2-2× (attention over 30K context per decode
+      token).
+    - KV-usage peak higher by ≥ 12 % of the pool. That is ≈ 30K of 1.0M tokens at TP=4, shared through the prefix
+      cache. Without a shared prefix it would be 30K tokens per request.
+    - FAIL (for the paper claim) if skills TBT ≤ 1.1× lora.
+  - H3: phase C SM_ACTIVE ≥ 2× phase A (A ≈ 0.1-0.25 at 0.5 rps). FAIL if < 1.3×.
+  - H4:
+    - Skills: ids ≈ 100 %, verbatim ≈ 40 % (smoke: 282/282, 118/282).
+    - LoRA and base: ids ≤ 2 %, verbatim ≤ 2 %.
+    - FAIL if LoRA verbatim > 10 %.
+  - H5:
+    - GSM8K / MMLU: rsi within ±2 of base.
+    - Skills in context within ±2 on GSM8K/MMLU, but −1 to −5 on FiNER.
+    - rsi on FiNER: −3 to +2.
+    - FAIL ("distillation harms") if rsi drops > 3 on GSM8K or MMLU with p < 0.05.
+- **Actual** (run dir `RSI-system/deltaserve/work/runs/paper1`, report `paper_metrics.md`):
+  - Loop: B 427/500 correct; 427 rows; C 34 cycles, 526K tokens in 281 s (1873 FT tok/s); loss 0.289 → 0.154.
+    Same as rsi-e2e-1/2.
+  - **H1 — FAIL as predicted.** Formula (n=200), base / base+skills / LoRA / LoRA+skills = 68.5 / 86.0 / 75.0 / 85.5.
+    - rsi_skills vs base_skills: −0.5 (+2/−3, p=1.0).
+    - The playbook alone is far stronger than I predicted (86 vs my 74-78).
+    - The LoRA recovers 6.5 of the playbook's 17.5 points (37 %) with zero context (p=0.029 vs base). It adds nothing
+      on top of the playbook, which is expected in hindsight: it was distilled from traces generated WITH that same
+      playbook, so it carries a subset of the same information.
+    - "LoRA + skills > skills" needs new knowledge in the LoRA (e.g. traces from user feedback that the playbook does
+      not contain), not a distillation of the playbook itself.
+  - **H3 — PASS.** DeltaServe GPUs 0-3, same 0.5-rps traffic:
+    - SM_ACTIVE 19.2 % (A) → 56.0 % (C), 2.9×; nvidia-smi util 59 → 96 %; power 274 → 493 W/GPU.
+    - TTFT p50/p99 35/51 → 81/268 ms; SLO<0.3 s 99.5 → 99.1 %; TBT p50 8.7 → 8.3 ms, p99 9.8 → 25.8 ms.
+  - **H4 — PASS.**
+    - Skills deployment: ids 282/282 (100 %), verbatim 149/282 (52.8 %).
+    - Base control: 1/282, 0/282.
+    - LoRA: 1/282 ids, 7/282 verbatim (2.5 %). All 7 are one textbook sentence (the Sharpe-ratio definition "(R_p −
+      R_f)/σ_p, where R_p is the portfolio return, R_f is the risk-free rate…") repeated in 7 bullets, elicited by
+      the attack that asks how to compute Sharpe. That is public knowledge, not playbook content.
+    - The single id hit (calc-00001) also appears for the base model: a guessable id.
+  - **H5 — PASS (no harm from distillation; harm from irrelevant skills in context).**
+    - LoRA vs base: FiNER +0.1 (p=0.27), GSM8K −0.5 (p=0.28), MMLU −0.2 (p=0.77). All noise.
+    - Formula skills in context on FiNER: −4.6 (+19/−49, **p=0.0004**) for base and −5.8 for the LoRA. On GSM8K
+      −0.7 (p=0.23), on MMLU +0.5 (n.s.).
+    - Skills in context also cost eval time: GSM8K 649 s vs 223 s, FiNER 566 s vs 181 s on one GPU.
+  - H2: see paper-1b. The 4-rps pass here repeated prompts and is invalid; the LoRA rows are unmerged kernels.
+  - Audit:
+    - Every accuracy is on test splits or other benchmarks. The adapter was trained only on formula-train traces.
+    - Temp 0, one run each.
+    - Sign tests are paired on identical items.
+    - The FiNER drop with skills is the strongest "skills harm" evidence; GSM8K/MMLU are not affected.
+
+### paper-1b — serving-cost follow-up: fresh prompts at 4 rps, merged LoRA, no prefix sharing   (2026-10-20, fs-mbz-gpu-198 GPUs 0-3, job 2721371)
+- **Why (audit of paper-1 §2):**
+  - (a) The 4-rps pass repeated the 200 test prompts already sent at 1 rps. Prefix-cache hit was 98 % vs 54 %, so whole
+    prompts hit the cache and the 4-rps TTFT is not valid.
+  - (b) The "LoRA" rows run stock vLLM's unmerged multi-LoRA kernels: +67 ms TTFT and +2.6 ms TBT vs base at 1 rps.
+    That cost belongs to the serving stack, not to the idea; a single customized model is served merged.
+  - (c) With one shared playbook and prefix caching, the skills' KV is shared. Per-user skills are not shared, and that
+    case was never measured.
+- **Command:** `srun --jobid 2721371 --overlap bash deltaserve/scripts/paper_run_cost2.sh paper1`. The steps:
+  1. `merge_lora.py`: W += (32/16)·B·A on q,k,v,o → `runs/paper1/merged`.
+  2. `cost_fresh`: P / L / M servers, every condition at 4 rps on the formula TRAIN split (500 new prompts).
+  3. `cost`: adds merged / merged_skills at 1 rps on the test split, next to paper-1's 1-rps rows.
+  4. `cost_nopc`: base and skills, prefix caching OFF, 1 rps.
+- **Predicted:**
+  - Merged is within ±10 % of base on TTFT and TBT, and its formula accuracy on the traffic is within ±3 of lora@1's
+    73.5 (sanity check of the merge).
+  - Fresh 4 rps: skills TTFT p50 ≥ 2× merged.
+  - No-prefix-cache skills: TTFT p50 ≥ 1 s (a 30K-token prefill per request); peak KV usage ≥ 5× its prefix-cached run.
+  - FAIL / merge bug if merged accuracy is < 70 on the 200 test items.
+- **Actual — all PASS** (`runs/paper1/paper_metrics.md` §2, three tables):
+  - **Merge sanity:**
+    - merged@1 test 74.5 % (lora@1 73.5, the eval 75.0).
+    - On the same 500 train prompts, merged 76.2 vs lora 75.8. The train-split numbers are in-sample for the
+      adapter and are used for latency only.
+  - **Merged = base latency:**
+    - 1 rps: TTFT p50/p99 41/66 vs base 43/62 ms; TBT p50 6.7 vs 7.0 ms.
+    - Fresh 4 rps: 42/85 vs 42/68 ms; TBT 6.9 vs 6.8 ms.
+    - Unmerged vLLM multi-LoRA costs +67 ms TTFT and +2.6 ms TBT. That is a serving-stack cost the merged model
+      does not pay.
+  - **Fresh 4 rps, shared prefix cached:**
+    - Skills vs merged: TTFT p50 119 vs 42 ms (2.8×), p99 861 vs 85 ms (10×).
+    - TBT p50 13.4 vs 6.9 ms (1.9×), p99 46.8 vs 24.7 ms.
+    - E2E p50 4.06 vs 1.77 s.
+    - KV usage mean 2.2 vs 0.1 %; running peak 33 vs 15.
+    - Prompt tokens 30,137 vs 391 (77×).
+  - **Prefix cache OFF (per-user skills), 1 rps:**
+    - Skills: TTFT p50 **34.0 s**, p99 99 s; TBT p50 318 ms; KV usage mean 76 %, peak 99.6 %; 59 running (KV-bound:
+      1.78M-token pool / 30.5K tokens = 58), 63 waiting.
+    - Base: 38 ms / 6.7 ms. The server cannot sustain 1 rps with per-request 30K-token skills (7.36 GiB KV each).
+  - Skills + LoRA (merged_skills@4) is the slowest cached condition: the outputs are longer (441 vs 337 tokens).
+- **Decision:**
+  - The paper's cost claim should compare skills against the MERGED customized model.
+  - Report both the shared-cache (best case for skills) and the no-sharing (per-user skills) settings.
+  - Never report the paper-1 4-rps rows (repeated prompts).
+
+### agent-1 — sequential (inference, then training) vs co-serving, TraceLab coding-agent workload   (2026-10-20, fs-mbz-gpu-198 ×8 H200)
+- **Reflection / audit:**
+  - Done so far: paper-1/1b measured LoRA vs skills (accuracy, context/KV, TTFT/TBT, GPU utilization, leakage).
+  - The co-serving phase C so far used one simple Poisson ACE workload (0.5 rps, short prompts). It said nothing
+    about agentic traffic, or about what the alternative costs in wall-clock time.
+  - The user asks for the comparison against running the two jobs disaggregated in time (serve, then train), with
+    requests following TraceLab (arXiv:2606.30560), and for task completion time.
+  - Why TraceLab: its traffic is long-context, short-output, with heavy-tailed tool latencies and human-paced gaps
+    (human think time is 92 % of session wall-clock). Those gaps are exactly where co-serving trains.
+  - Honest risks:
+    1. The co-serving server's KV pool is 562K tokens vs 1.78M for a plain deployment (the FT buffers take the
+       memory). Agent contexts are long, so prefix-cache evictions can make co-serving's agent latency worse. This
+       is a real cost and will be reported.
+    2. The FT job is small (sft_from_traces, 427 rows, 263K tokens/epoch).
+- **Goal/criteria:**
+  - Agent task = one user request plus its tool loop. Report its completion time (p50/p90/p99), and per-round
+    TTFT/TBT.
+  - Report the FT job's completion time (/start_finetuning → final/ adapter).
+  - Report the makespan of both jobs:
+    - Sequential = inf makespan + ft time.
+    - FT-first variant: every task delayed by the ft time.
+    - Co = max(replay end, ft end).
+  - PASS (the co-serving claim holds) if:
+    - co makespan ≤ 0.8 × sequential makespan, AND
+    - co agent-task p50 completion is within +10 % of inference-only.
+- **Workload** (`deltaserve/scripts/agent_trace.py`, TraceLab v0.0.1 DuckDB, Claude rounds, seed 0):
+  - 48 sessions from a pool of 2,510, Poisson arrivals at 0.05/s (last at 995 s).
+  - 900 rounds, 83 tasks; each session cut at its first 4 tasks / 80 rounds.
+  - Real appends ×1/8 (p50/p90 141/918), real outputs (p50/p90 184/1115).
+  - Real tool gaps (p50 0.09 s, p99 182 s) and human gaps (p50 129 s), each capped at 300 s.
+  - Context: shared 2K system block plus the session history, with output re-sent as input. Compaction to
+    system + 4K when the context reaches 36,864.
+  - Replay (`agent_replay.py`) is closed-loop per session, uses synthetic token ids, and forces output length.
+- **FT job:** `runs/paper1/sft_from_traces.jsonl` (427 correct ACE trajectories), 4 epochs ≈ 1.05M tokens. Same
+  recipe as train_only.yaml: q,k,v,o r16, lr 1e-4, 16K batch tokens.
+- **Commands** (all three on node 198, Qwen3-32B YaRN x4, TP=4, DeltaServe fork):
+  - `WORKLOAD=work/agent/agent_workload.json DATA=.../sft_from_traces.jsonl EPOCHS=4 agent_run.sh co 0,1,2,3 8000 work/runs/agent1/co`
+  - `... agent_run.sh inf 4,5,6,7 8100 work/runs/agent1/inf`
+    - Finetuning off, gpu_memory_utilization 0.90. Runs concurrently with co on the other 4 GPUs; host-side
+      interference is possible.
+  - Then `... agent_run.sh ft 4,5,6,7 8100 work/runs/agent1/ft`.
+- **Predicted:**
+  - Inf replay makespan ≈ 40 min (≈ 33 min of trace waits plus LLM time).
+  - FT alone ≈ 9–10 min (~1.9K tok/s).
+  - Co: FT finishes within the replay window at ≈ 15–25 min (it trains in the gaps). Makespan ≈ replay ≈ 41 min vs
+    sequential ≈ 50 min (~0.82×).
+  - Co agent-task p50 completion +5–15 % vs inf (TTFT p50 ~2×, smaller KV).
+  - FALSIFIED if co FT does not finish before the replay ends, or co task p50 is > +25 %.
+- **Deviation (11:20):**
+  - The `inf` run on the DeltaServe fork with finetuning off (gpu_memory_utilization 0.90) died 50 s in. The
+    error was a CUDA illegal memory access in flash-attn (`hopper/flash_fwd_launch_template.h:199`, a 7,180-token
+    prefill); 169 of its 184 rounds errored. The log is kept in `runs/agent1/inf_fork_crashed/`.
+  - It was killed. The inference-only baseline is now stock vLLM 0.31 (the paper-1 serving server), run on GPUs
+    4-7 after `ft` via `agent_run2.sh` (since renamed `agent_run.sh`). It keeps the same max_model_len 40960, step budget 16384 and chunking 2048.
+  - Consequence: the inf baseline uses a different (newer) engine than co. Its latency is, if anything, better
+    than the fork's would be, which makes it conservative for the co-serving claim.
+  - Early co observation: FT-only forwards (15,936 tokens ≈ 2–3 s) are repeatedly aborted at layer 13–18 by agent
+    arrivals (tier C). In the first 4 min, FT was at 5 cycles / 80K tokens.
+- Also: the first `ft` launch died with EADDRINUSE on the backward NCCL port 29677 (held by `co`), and was rerun
+  with `DSERVE_BACKWARD_NCCL_PORT=29777`.
+- **Actual** (`RSI-system/deltaserve/results/agent1_2026-10-20/agent_metrics.md`; RESULTS.md §4) — **FAIL** on both
+  criteria:
+  - **Makespan:** co 2,161 s vs sequential 2,386 s = **0.906×** (criterion ≤ 0.8×). The inf replay took 2,130 s
+    (predicted ~40 min, actual 35.5).
+  - **FT job:**
+    - Alone: **255 s** at 4,122 tok/s (predicted 9–10 min).
+    - Co-served: 1,612 s at 653 tok/s (16 % of alone). It finished 9 min before the replay ended, as predicted.
+    - Loss is identical, 0.523 → 0.053.
+  - **Agent task completion** (user message → last LLM round of its tool loop):
+    - p50 / p90 / p99: inf 38.9 / 272 / 905 s, co 46.6 / 306 / 936 s.
+    - **+20 % at p50** (criterion ≤ +10 %; not past the +25 % falsification line).
+    - LLM time per task: +19 %.
+  - **Per-round latency:** TTFT p50 152 → 179 ms; TBT 8 → 10 ms.
+  - **Utilization:** SM_ACTIVE 33.4 / 36.4 %. 35 % of the inf wall time had no request in flight.
+  - **Aborts:** 43 tier-C aborts of FT-only forwards (≈0.36M token-equivalents discarded). FT stalled 11:28–11:37
+    at peak load.
+  - Train-then-serve variant: FT done at 255 s, task p90 272 → 354 s.
+- **Decision / insight:**
+  - Co-serving wins makespan by at most the FT job's standalone time. Here that job is small (4 min) next to 36 min
+    of agent traffic, so the win is 9 %.
+  - The real gap: on agent traffic the GPU is idle about two-thirds of the time, yet DeltaServe trains at only 16 %
+    of its standalone rate. The idle time is fragmented: tool gaps are p50 0.09 s, and a 16K FT forward is
+    all-or-nothing and gets aborted.
+  - Next, if pursued:
+    1. Gap-sized FT forwards: cap FT tokens per FT-only step from the observed inter-arrival gap.
+    2. Keep the partial forward on abort instead of discarding it.
+    3. A larger FT job (e.g. 10×), so the makespan effect is measurable.
+  - Separately: the DeltaServe fork with finetuning off crashes in flash-attn on this workload — open bug.
