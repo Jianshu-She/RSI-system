@@ -1,0 +1,63 @@
+{
+ "formula": {
+  "examples": 803,
+  "unique_items": 417,
+  "tokens_total": 534069,
+  "len_p50": 621,
+  "len_max": 4462,
+  "per_run": {
+   "formula_offline_gt": {
+    "first_attempts": 500,
+    "correct_kept": 408
+   },
+   "formula_offline_nogt": {
+    "first_attempts": 500,
+    "correct_kept": 395
+   }
+  }
+ },
+ "finer": {
+  "examples": 277,
+  "unique_items": 207,
+  "tokens_total": 706652,
+  "len_p50": 2508,
+  "len_max": 5503,
+  "per_run": {
+   "finer_offline_gt": {
+    "first_attempts": 450,
+    "correct_kept": 178
+   },
+   "finer_offline_gt_resume450": {
+    "first_attempts": 10,
+    "correct_kept": 4
+   },
+   "finer_offline_nogt": {
+    "first_attempts": 300,
+    "correct_kept": 95
+   },
+   "finer_offline_nogt_resume300": {
+    "first_attempts": 8,
+    "correct_kept": 0
+   }
+  }
+ },
+ "appworld": {
+  "examples": 122,
+  "unique_items": 77,
+  "tokens_total": 1586615,
+  "len_p50": 12502,
+  "len_max": 28249,
+  "per_run": {
+   "qwen_off_gt_adapt": {
+    "successful": 82,
+    "kept": 64,
+    "dropped_gt_retry": 18
+   },
+   "qwen_off_nogt_adapt": {
+    "successful": 58,
+    "kept": 58,
+    "dropped_gt_retry": 0
+   }
+  }
+ }
+}

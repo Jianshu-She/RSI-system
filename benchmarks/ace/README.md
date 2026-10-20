@@ -40,7 +40,9 @@ eval/                  report.py (results + paired tests), eval_split.py (score 
                        finance_snapshots.py + resume_finance.py (recovery). The "(empty)" playbook file is deltaserve/configs/empty_context.txt
 datagen/               build_sft_data.py (ACE traces -> data_v1), make_data_v2.py (empty bullet_ids), build_sft_baselines.py,
                        ds_pool.py + ds_select.py (scored candidate pool -> selected SFT sets)
-data/selected/         selected SFT sets for Formula/FiNER (ready to train) + gzipped candidate pools; see its README
+data/                  SFT data (train items only), see data/README.md:
+                         original/  data_v1, data_v2 (ACE-LoRA v2), baselines (gold / self-distillation)
+                         selected/  difficulty-weighted selected sets + gzipped candidate pools (recommended)
 finetune/              train_lora_ace.py (original trainer), job_*.sbatch (train + serve + eval), make_lora_catalog.py,
                        job_ds_pool.sbatch / job_ds_train_eval.sbatch (data selection: build pool / train + eval all sets)
 results/               RESULTS.md, report_output.txt, lora_catalog/ (per-adapter data/training/test summary)

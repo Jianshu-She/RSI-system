@@ -1,5 +1,8 @@
 # Selected LoRA SFT data (data selection, ds_r1)
 
+> New data. The data used before selection (ACE-distilled v1/v2, gold and self-distillation baselines) is kept in
+> [`../original/`](../original/README.md). See [`../README.md`](../README.md) for an overview.
+
 Ready-to-train SFT sets for **Formula** and **FiNER**, built only from **train** items (no val/test). Each row is the
 chat JSONL format of [`rsi/finetune/DATA_FORMAT.md`](../../../../rsi/finetune/DATA_FORMAT.md):
 

@@ -11,4 +11,4 @@ __pycache__/
 .venv*/
 *.jsonl
 !**/splits/*.jsonl
-!benchmarks/ace/data/selected/*.jsonl
+!benchmarks/ace/data/**/*.jsonl

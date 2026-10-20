@@ -1,0 +1,14 @@
+{
+ "formula_gold_all": 500,
+ "formula_gold_matched": 417,
+ "formula_self_all": 344,
+ "formula_self_matched": 335,
+ "formula_base_train_correct": "344/500",
+ "formula_ace_items": 417,
+ "finer_gold_all": 1000,
+ "finer_gold_matched": 207,
+ "finer_self_all": 268,
+ "finer_self_matched": 100,
+ "finer_base_train_correct": "268/1000",
+ "finer_ace_items": 207
+}
