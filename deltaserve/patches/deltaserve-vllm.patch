@@ -2601,7 +2601,7 @@ index d1afade..d2d3a8d 100644
      def _ft_abort_sentinel(self, coord):
          """[forward_interruptible / tier C] The empty output that tells the
 diff --git a/dserve-vllm/vllm/v1/worker/gpu_worker.py b/dserve-vllm/vllm/v1/worker/gpu_worker.py
-index c196baf..764e968 100644
+index c196baf..7f7237f 100644
 --- a/dserve-vllm/vllm/v1/worker/gpu_worker.py
 +++ b/dserve-vllm/vllm/v1/worker/gpu_worker.py
 @@ -620,6 +620,8 @@ class Worker(WorkerBase):
@@ -2613,7 +2613,20 @@ index c196baf..764e968 100644
          coordinator.backward_process = backward_process
          coordinator.backward_sleep_s = float(ft_cfg.backward_sleep_seconds)
          # [DeltaServe] Phase 7 / M4.1: under TP>1 this worker-side coordinator is
-@@ -707,6 +709,9 @@ class Worker(WorkerBase):
+@@ -628,6 +630,12 @@ class Worker(WorkerBase):
+         # SchedulerOutput command) + poll_backward_relay, and reports both back
+         # via ModelRunnerOutput; the scheduler owns the trigger decision + store.
+         coordinator.relay_mode = tp_size > 1
++        # FT admission master switch, same rule as the scheduler's coordinator.
++        # Under TP the runner relays this worker's flag (finetune_ft_started) and
++        # the scheduler opens admission when it reads True — so leaving the
++        # coordinator default (True) here started FT at launch even with
++        # start_on_launch=False.
++        coordinator.ft_started = bool(getattr(ft_cfg, "start_on_launch", True))
+         # [forward_interruptible / tier C] Wire the accumulator's per-layer
+         # abort check to the coordinator's threading.Event. The hook does a
+         # cheap None-check first, so this is zero-cost when the feature is
+@@ -707,6 +715,9 @@ class Worker(WorkerBase):
  
          am = self.model_runner.lora_manager._adapter_manager
          slot = am.lora_index_to_id.index(FT_LORA_INT_ID)
@@ -2623,7 +2636,7 @@ index c196baf..764e968 100644
  
          # Gather the FT adapter's served stacked buffers: qkv_proj (3 slices q/k/v)
          # + o_proj (1 slice), per layer. The trainer writes [slot] rows into these.
-@@ -730,6 +735,34 @@ class Worker(WorkerBase):
+@@ -730,6 +741,34 @@ class Worker(WorkerBase):
          dprint(f"shared served LoRA buffers (slot={slot}, {len(layers)} layers) "
                 f"with backward process: {ack}")
  
@@ -2658,7 +2671,7 @@ index c196baf..764e968 100644
      def update_config(self, overrides: dict[str, Any]) -> None:
          self.model_runner.update_config(overrides)
  
-@@ -1133,6 +1166,11 @@ class Worker(WorkerBase):
+@@ -1133,6 +1172,11 @@ class Worker(WorkerBase):
  
          activate_triton_jit_monitor()
  

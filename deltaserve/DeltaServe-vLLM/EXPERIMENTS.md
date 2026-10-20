@@ -483,3 +483,80 @@
     2. Keep the partial forward on abort instead of discarding it.
     3. A larger FT job (e.g. 10×), so the makespan effect is measurable.
   - Separately: the DeltaServe fork with finetuning off crashes in flash-attn on this workload — open bug.
+
+### rsi-poisson — RSI traffic with Poisson arrivals: sequential (stop serving to train) vs co-serving   (2026-10-20, fs-mbz-gpu-198 ×8 H200)
+- **Reflection / audit:**
+  - agent-1 replayed TraceLab sessions. The user clarified that the intent was different: take the RSI workload
+    and borrow only TraceLab's way of sending requests, a Poisson arrival process.
+  - The sequential baseline there was also unrealistic: it served first and then trained, with no traffic during
+    training. Under continuous traffic, a single deployment that stops to train makes the requests arriving during
+    training wait. That is the cost co-serving removes.
+  - So the comparison now runs on one server config with identical engines (DeltaServe, FT enabled), and the only
+    difference is whether serving stops for the FT job.
+- **Goal/criteria:**
+  - Per rate, report request completion time (arrival → done, including any hold) at p50/p90/p99, the FT job time,
+    and when everything is done.
+  - PASS (the co-serving claim holds) if, at every rate:
+    - co p90 request completion < seq p90, AND
+    - co FT done ≤ 3× the sequential FT time.
+- **Setup:**
+  - Traffic: ACE formula train split (500 items, empty playbook) to the base model. Poisson at RATE ∈ {0.5, 1, 2}
+    rps, one pass. Temp 0, thinking off, max 4096 tokens.
+  - FT job: `runs/paper1/sft_from_traces.jsonl` (427 correct trajectories from the RSI loop) × 2 epochs = 526K
+    tokens (the RSI recipe). It starts at t = 120 s.
+  - seq: hold new arrivals, drain in-flight requests, POST /start_finetuning, wait for final/, release.
+  - co: POST /start_finetuning and keep serving.
+  - Server: train_only.yaml with profile_on_launch true, Qwen3-32B YaRN x4, TP=4, KV 562K.
+- **Commands:**
+  - `RATE=r DATA=... EPOCHS=2 rsi_poisson.sh co 0,1,2,3 8000 work/runs/rsip/co_r<r>` (NCCL 29677)
+  - `rsi_poisson.sh seq 4,5,6,7 8100 work/runs/rsip/seq_r<r>` (NCCL 29777)
+  - The pairs run in parallel on disjoint GPUs, one rate after another.
+- **Predicted:**
+  - FT alone ≈ 130 s (agent-1 measured 4.1K tok/s alone).
+  - seq: the ~65 / 130 / 260 requests arriving during the FT window (0.5 / 1 / 2 rps) are held for ~65 s on
+    average. That shows up at p90 for 1–2 rps and at p99 for 0.5 rps: p90 > 30 s at 1 and 2 rps.
+  - co: FT ≈ 280 s at 0.5 rps (paper-1: 281 s). Longer at 2 rps (~400–700 s), and it could stall the way agent-1
+    did. Request p50 is +20 % (paper-1: e2e p50 1.72 → 2.06 s) and p90 stays < 10 s.
+  - Everything done at ≈ the traffic length (1000 / 500 / 250 s + tail) in both modes. At 2 rps, seq ends later,
+    because the held burst is served after FT.
+  - FALSIFIED if co p90 ≥ seq p90 at any rate, or co FT does not finish before the traffic ends at 0.5 rps.
+- **Deviation (12:36):**
+  - The first attempt (`runs/rsip_invalid_ftstart/`) is invalid: FT trained from server launch in both modes, long
+    before t = 120 s.
+  - Cause, a bug: under TP the worker-side coordinator keeps the default `ft_started=True`. Only the scheduler's
+    coordinator reads `start_on_launch`. The runner relays the worker's flag (`finetune_ft_started`), and the
+    scheduler then opens admission, so `start_on_launch: false` is ignored at TP > 1.
+  - Fixed in `v1/worker/gpu_worker.py`: the worker coordinator now takes `start_on_launch` too.
+  - Earlier runs affected:
+    - paper-1: no corpus at launch, so no effect.
+    - agent-1 co: FT began ~5 s before its POST, which is negligible.
+  - Relaunched.
+- **Actual** (`RSI-system/deltaserve/results/rsi_poisson_2026-10-20/`; RESULTS.md §5). Request completion
+  p50/p90/p99 in s, with the FT time:
+
+  | rate | seq | co |
+  |---|---|---|
+  | 0.5 | 1.64 / 6.35 / 119.8, FT 126 s | 1.67 / 2.95 / 6.4, FT 306 s |
+  | 1 | 1.92 / 86.0 / 127.3, FT 126 s | 1.82 / 3.54 / 6.2, FT 436 s |
+  | 2 | 6.46 / 107.6 / 131.2, FT 126 s | 1.71 / 2.63 / 5.5, FT 267 s |
+
+  - Under seq, 51 / 135 / 249 requests were held for ~65–71 s each.
+  - Criterion 1 (co p90 < seq p90 at every rate): **PASS**.
+  - Criterion 2 (co FT ≤ 3× seq): **FAIL at 1 rps** (3.5×). It held at 0.5 rps (2.4×) and 2 rps (2.1×).
+  - Predictions:
+    - FT alone ≈ 130 s: actual 126. ✔
+    - seq p90 > 30 s at 1–2 rps: actual 86 / 108. ✔
+    - co FT ≈ 280 s at 0.5 rps: actual 306. ✔
+    - co p50 +20 %: actual +2 % at 0.5 rps and −6 % / −74 % at 1 / 2 rps (seq's p50 includes holds). ✘ — better
+      than predicted.
+    - co FT ~400–700 s at 2 rps: actual 267 s, but **0 tokens trained while serving**. The whole job ran after
+      the traffic ended, so the prediction was right for the wrong reason.
+  - FT rate while serving: 41 / 23 / 0 % of standalone (4.18K tok/s).
+- **Decision / insight:**
+  - For RSI the right comparison is service availability vs adapter freshness.
+    - Co-serving keeps request p99 ≤ 6.4 s at every rate, where stopping to train costs a 65–71 s wait for 10–50 %
+      of the requests.
+    - The cost is an adapter that is ready 140–309 s later.
+  - DeltaServe's FT share collapses with load (0 % at 2 rps on 4×H200 with ACE prompts). This is the same
+    fragmented-gap problem as agent-1.
+  - The next lever is still FT steps sized to the gaps, plus revisiting the 0.1 s-window RPS throttle.

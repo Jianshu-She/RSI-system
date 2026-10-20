@@ -630,6 +630,12 @@ class Worker(WorkerBase):
         # SchedulerOutput command) + poll_backward_relay, and reports both back
         # via ModelRunnerOutput; the scheduler owns the trigger decision + store.
         coordinator.relay_mode = tp_size > 1
+        # FT admission master switch, same rule as the scheduler's coordinator.
+        # Under TP the runner relays this worker's flag (finetune_ft_started) and
+        # the scheduler opens admission when it reads True — so leaving the
+        # coordinator default (True) here started FT at launch even with
+        # start_on_launch=False.
+        coordinator.ft_started = bool(getattr(ft_cfg, "start_on_launch", True))
         # [forward_interruptible / tier C] Wire the accumulator's per-layer
         # abort check to the coordinator's threading.Event. The hook does a
         # cheap None-check first, so this is zero-cost when the feature is

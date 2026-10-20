@@ -129,6 +129,19 @@ What each part measures and the results: [results/RESULTS.md §3](results/RESULT
 condition), `scrape_metrics.py` (vLLM /metrics at 1 Hz), `gpu_monitor.sh` (DCGM SM-active at 1 Hz),
 `leak_probe.py` (prompt extraction), `merge_lora.py`.
 
+### RSI traffic with Poisson arrivals: stop serving to train vs co-serving
+```bash
+export DATA=<the loop's sft_from_traces.jsonl> EPOCHS=2 TRAIN_AT=120
+for r in 0.5 1 2; do
+  RATE=$r DSERVE_BACKWARD_NCCL_PORT=29677 bash deltaserve/scripts/rsi_poisson.sh co  0,1,2,3 8000 deltaserve/work/runs/rsip/co_r$r &
+  RATE=$r DSERVE_BACKWARD_NCCL_PORT=29777 bash deltaserve/scripts/rsi_poisson.sh seq 4,5,6,7 8100 deltaserve/work/runs/rsip/seq_r$r &
+  wait
+done
+python3 deltaserve/scripts/rsi_poisson_metrics.py deltaserve/work/runs/rsip   # -> rsi_poisson_metrics.md
+```
+`rsi_traffic.py --train-at T --train-mode {co,seq} --ft-final <final adapter file>` drives the FT job from the traffic
+client. Results: [results/RESULTS.md §5](results/RESULTS.md).
+
 ### Sequential vs co-serving on a coding-agent workload (TraceLab)
 ```bash
 # workload: real Claude Code sessions from the TraceLab trace (download the DuckDB from github.com/uw-syfi/TraceLab releases)

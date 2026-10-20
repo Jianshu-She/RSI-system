@@ -243,6 +243,73 @@ Caveats:
 - `co` and `ft`/`inf` ran on the same node at the same time, on disjoint GPUs.
 - Token lengths are scaled ×1/8 and gaps are capped, so absolute times are not TraceLab's.
 
+## 5. RSI traffic with Poisson arrivals: stop serving to train vs co-serving (`scripts/rsi_poisson.sh`; `rsi_poisson_2026-10-20/`)
+
+**Question:** in the RSI loop, traffic does not stop while the model trains. A single deployment can do one of two
+things:
+- **seq:** stop serving to train on the same GPUs. Requests that arrive meanwhile wait.
+- **co:** train while serving (DeltaServe).
+
+What does each cost in request completion time, and when is the trained adapter ready?
+
+**Setup:**
+- One DeltaServe server config for both modes (train_only.yaml plus the SLO profiling pass), so the engine and
+  memory (KV 562K) are identical.
+- Traffic: ACE formula, 500 requests (train split, empty playbook) to the base model. Arrivals are Poisson at 0.5,
+  1 or 2 rps; this arrival process is what TraceLab's csv_export synthesizes.
+- FT job: the loop's 427 correct trajectories × 2 epochs = 526K tokens (the RSI recipe). It starts at t = 120 s.
+- seq: hold arrivals, drain in-flight requests (≈ 2 s), train alone, then release the held requests.
+- Request completion = done − arrival.
+
+| rate | mode | request completion p50 / p90 / p99 | mean | requests held (mean wait) | FT job time | adapter ready at | all done at | TTFT p50 / p99 |
+|---|---|---|---|---|---|---|---|---|
+| 0.5 | seq | 1.64 / 6.35 / **119.8 s** | 9.06 s | 51 (70.8 s) | 126 s | 246 s | 1,042 s | 36 / 517 ms |
+| 0.5 | **co** | 1.67 / 2.95 / **6.4 s** | 1.92 s | 0 | 306 s | 426 s | 1,042 s | 37 / 254 ms |
+| 1 | seq | 1.92 / **86.0** / 127.3 s | 20.7 s | 135 (67.4 s) | 126 s | 248 s | 522 s | 40 / 1,712 ms |
+| 1 | **co** | 1.82 / **3.54** / 6.2 s | 2.15 s | 0 | 436 s | 556 s | 556 s | 41 / 510 ms |
+| 2 | seq | 6.46 / **107.6** / 131.2 s | 36.4 s | 249 (64.7 s) | 126 s | 247 s | 266 s | 907 / 2,136 ms |
+| 2 | **co** | 1.71 / **2.63** / 5.5 s | 1.89 s | 0 | 267 s | 387 s | 387 s | 39 / 80 ms |
+
+FT progress while the traffic was running (co):
+
+| rate | FT tokens done while serving | FT rate while serving | rest trained after the traffic ended |
+|---|---|---|---|
+| 0.5 | all 526K | 1,720 tok/s (41 % of alone, 4,180 tok/s) | — |
+| 1 | 392K / 526K | 973 tok/s (23 %) | 34 s |
+| 2 | **0** | 0 | all 125 s |
+
+Accuracy is 344–349/500 in every cell, i.e. the same; the traffic goes to the base model in both modes.
+
+**Reading:**
+- **Co-serving never interrupts service.**
+  - Its request completion p90 is 2.6–3.5 s at every rate, vs 6.4 / 86 / 108 s for seq. Its p99 is ≤ 6.4 s vs
+    120–131 s.
+  - Under seq, every request that arrives during the 126 s training window waits ~65–71 s on average: 10 / 27 /
+    50 % of all requests at 0.5 / 1 / 2 rps.
+  - At 2 rps the released burst also inflates TTFT (p50 907 ms).
+- **The price is the adapter arriving later.**
+  - The FT job takes 2.1–3.5× longer co-served (267–436 s vs 126 s alone). The adapter is ready 180 / 309 / 140 s
+    later than under seq.
+  - Everything finishes at the same time at 0.5 rps, 34 s later at 1 rps, and 121 s later at 2 rps. The 500-request
+    traffic is finite; under continuous RSI traffic there is no "all done", only the service gap vs the adapter's
+    lateness.
+- **At 2 rps DeltaServe trained nothing while serving.**
+  - The FT job ran entirely after the traffic ended. Co-serving then reduces to "serve first, train later", which
+    still keeps service uninterrupted.
+  - The FT rate while serving falls from 41 % to 23 % to 0 % of standalone as the rate goes 0.5 → 1 → 2 rps.
+  - The cause is the admission gates: the 0.1 s-window RPS throttle (`rps_throttle_close_rps: 5`) and the TTFT SLO.
+    Bursts of Poisson arrivals close admission, and the remaining gaps are too short for a 16K-token FT-only step.
+  - Same direction as agent-1 §4: the more fragmented the gaps, the less co-serving trains.
+- Agent-1 criteria check:
+  - co p90 < seq p90 at every rate: **PASS**.
+  - co FT ≤ 3× seq FT: 2.4× / **3.5×** / 2.1× — **fails at 1 rps**.
+
+Caveats:
+- One run per cell.
+- co and seq ran at the same time on disjoint GPUs of one node.
+- The bug "FT starts at launch under TP" was fixed before these runs (`v1/worker/gpu_worker.py`). The first attempt,
+  which trained from launch, is not reported.
+
 ## Caveats
 
 - Single runs, temperature 0. Differences below ~3 points (n=200) are noise.
