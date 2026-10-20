@@ -21,6 +21,7 @@ LoRA trained on ACE-distilled train traces, evaluated with an empty context (sam
 - FiNER: **68.5** (p=0.0005).
 - AppWorld: 28.6 (no significant effect).
 - Plain label SFT on all FiNER train items scores 73.8.
+- With **data selection** (difficulty-weighted, [`data/selected/`](data/selected/README.md)) the LoRA reaches Formula **81.5** and FiNER **75.2**. FiNER is now on par with the playbook in context (73.8), with no context at all.
 
 Paired tests, val traces and caveats are in [`results/RESULTS.md`](results/RESULTS.md).
 
@@ -37,8 +38,11 @@ scripts/               serve_qwen.sh, run_finance.sh, run_icl.sh, run_dc.sh, run
 baselines/             build_icl_context.py (+ icl/ the exact ICL contexts used), run_dc_finance.py (DC-CU)
 eval/                  report.py (results + paired tests), eval_split.py (score any context/LoRA on a split),
                        finance_snapshots.py + resume_finance.py (recovery). The "(empty)" playbook file is deltaserve/configs/empty_context.txt
-datagen/               build_sft_data.py (ACE traces -> data_v1), make_data_v2.py (empty bullet_ids), build_sft_baselines.py
-finetune/              train_lora_ace.py (original trainer), job_*.sbatch (train + serve + eval), make_lora_catalog.py
+datagen/               build_sft_data.py (ACE traces -> data_v1), make_data_v2.py (empty bullet_ids), build_sft_baselines.py,
+                       ds_pool.py + ds_select.py (scored candidate pool -> selected SFT sets)
+data/selected/         selected SFT sets for Formula/FiNER (ready to train) + gzipped candidate pools; see its README
+finetune/              train_lora_ace.py (original trainer), job_*.sbatch (train + serve + eval), make_lora_catalog.py,
+                       job_ds_pool.sbatch / job_ds_train_eval.sbatch (data selection: build pool / train + eval all sets)
 results/               RESULTS.md, report_output.txt, lora_catalog/ (per-adapter data/training/test summary)
 work/                  (created, git-ignored) upstream clones, venvs, model dir, results/, logs/, sft/
 ```

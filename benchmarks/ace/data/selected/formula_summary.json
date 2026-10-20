@@ -1,0 +1,46 @@
+{
+ "task": "formula",
+ "items_with_clean_candidate": 431,
+ "rand": {
+  "rows": 431,
+  "uncited_original": 420,
+  "mean_base_pass": 0.753,
+  "mean_nll": 0.396,
+  "from_teacher": 261
+ },
+ "clean": {
+  "rows": 431,
+  "uncited_original": 431,
+  "mean_base_pass": 0.753,
+  "mean_nll": 0.391,
+  "from_teacher": 262
+ },
+ "hard": {
+  "rows": 145,
+  "uncited_original": 145,
+  "mean_base_pass": 0.267,
+  "mean_nll": 0.256,
+  "from_teacher": 36
+ },
+ "hard_ctrl": {
+  "rows": 145,
+  "uncited_original": 143,
+  "mean_base_pass": 0.729,
+  "mean_nll": 0.396,
+  "from_teacher": 90
+ },
+ "quality": {
+  "rows": 431,
+  "uncited_original": 431,
+  "mean_base_pass": 0.753,
+  "mean_nll": 0.276,
+  "from_teacher": 85
+ },
+ "rand_hardup": {
+  "rows": 706,
+  "uncited_original": 695,
+  "mean_base_pass": 0.565,
+  "mean_nll": 0.38,
+  "from_teacher": 437
+ }
+}

@@ -41,6 +41,8 @@ deltaserve/              the ACE loop online: one DeltaServe (vLLM fork) server 
 ## Findings so far (Qwen3-32B)
 - **ACE**: reproduces on Formula (offline +GT 86.5 vs paper 85.5); same direction but smaller gains on FiNER and AppWorld.
   Distilling ACE traces into a LoRA recovers part of the gain without any context (Formula 69 → 75, FiNER 62 → 68.5).
+  With difficulty-weighted **data selection** the LoRA reaches Formula 81.5 / FiNER 75.2. FiNER matches the playbook (73.8)
+  with zero context ([selected data](benchmarks/ace/data/selected/README.md)).
 - **ReasoningBank**: not reproduced (+1.6 on 187 tasks, n.s., more steps). On unseen templates ReasoningBank is the best
   point estimate (+4.7, n.s.); LoRA v1 gave no gain (its final checkpoint overfit to a looping trace style); LoRA v2's run
   was invalidated by a site-search bug that is now fixed and guarded — it needs to be re-run.

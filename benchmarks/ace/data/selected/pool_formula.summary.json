@@ -1,0 +1,12 @@
+{
+ "items": 500,
+ "candidates_correct": 2479,
+ "items_with_candidate": 433,
+ "by_source": {
+  "ace:formula_offline_gt": 408,
+  "ace:formula_offline_nogt": 395,
+  "teacher": 1676
+ },
+ "base_pass_mean": 0.653,
+ "leak_rate": 0.14764017749092376
+}

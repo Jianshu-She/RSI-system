@@ -100,6 +100,53 @@ Comparisons involving ACE-LoRA v2:
 - AppWorld LoRA was trained on 122 trajectories (77 unique train tasks) and gives no significant effect (28.6 vs 27.2).
 - Lesson from v1: SFT targets must not reference context that is absent from the SFT input. Otherwise the adapter invents bullet-id lists until it hits max_tokens, and 126/200 Formula answers were unparseable.
 
+<a id="3b"></a>
+### 3b. Data selection for the LoRA (ds_r1)
+
+Question: does choosing *which* traces to train on matter more than how many?
+
+Data: a scored candidate pool on train items only. Teacher traces come from Qwen3-32B + offline+GT playbook (K=4) and from
+ACE first attempts. Difficulty is probed with the base model with an empty playbook (K=4). Each trace is scored by NLL, by a
+397B judge, and by a playbook-citation flag.
+
+Six selections were made. All have citations stripped. Data and build details are in
+[`data/selected/`](../data/selected/README.md), with code in `datagen/ds_pool.py` and `datagen/ds_select.py`.
+
+Training: one LoRA per set (r16, 2 epochs, lr 1e-4, thinking off, `rsi/finetune/train_lora.py`).
+
+Evaluation: TEST split, empty context, temperature 0, paired two-sided sign tests. Same-node controls reproduce the earlier
+numbers: base 68.5 / 62.1, v2 74.5 / 68.8, gold 73.6.
+
+| set (rows F / N) | Formula | FiNER |
+|---|---|---|
+| base | 68.5 | 62.1 |
+| ACE-LoRA v2 (803 / 207 items) | 74.5 | 68.8 |
+| gold-label LoRA (– / 1000) | – | 73.6 |
+| rand (431 / 634) | 77.5 (+9.0 vs base, p=.002) | 73.7 |
+| clean (431 / 452) | – | 72.2 |
+| quality (431 / 634) | – | 72.1 |
+| hard (145 / 496) | 79.5 (vs v2 +5.0, p=.031) | 73.9 |
+| hard_ctrl (145 / 496) | 67.0 | 72.3 |
+| **rand_hardup (706 / 1277)** | **81.5** (vs v2 +7.0, 20/6, p=.009) | **75.2** (vs v2 +6.3, 68/26, p<1e-4) |
+| ACE offline+GT playbook, no LoRA | 86.0 (rand_hardup −4.5, p=.022) | 73.8 (rand_hardup +1.4, n.s.) |
+
+Findings:
+- **Item difficulty is the deciding signal.**
+  - On Formula, 145 traces on items the base model cannot reliably solve give 79.5.
+  - 145 random items give 67.0: hard − hard_ctrl = +12.5 (28 vs 3 discordant items, p<1e-4).
+  - The 145 hard items also beat 431 random items.
+  - On FiNER the same contrast is +1.6 (p=.10), because 78% of the covered FiNER items are already "hard".
+- **Keep every item and add extra traces on the hard ones (`rand_hardup`).** This is the best set on both tasks.
+- **The 397B judge and "uncited only" filters do not help.** The judge score mostly tracks the citation flag. Stripping citations is safe: rand ≥ clean.
+- **LoRA vs skills.**
+  - On FiNER the selected LoRA (75.2) now matches the playbook (73.8) with zero context, from self-generated traces on 634 items.
+    It is also ≥ the LoRA trained on 1000 gold labels.
+  - On Formula the gap to the playbook shrinks from 17.5 to 4.5 points.
+- **Caveats.**
+  - One seed per set.
+  - The playbook numbers come from an earlier, separate eval.
+  - The teacher pool used the offline+GT playbook, which was learned on these same train items. No val or test data enters the pool.
+
 ## 4. Caveats (read before citing)
 
 - **Backbone and decoding differ from the paper**: Qwen3-32B instead of DeepSeek-V3.1. Static YaRN ×4 can slightly hurt short inputs. Thinking is off.

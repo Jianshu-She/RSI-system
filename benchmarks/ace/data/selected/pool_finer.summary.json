@@ -1,0 +1,14 @@
+{
+ "items": 1000,
+ "candidates_correct": 2167,
+ "items_with_candidate": 654,
+ "by_source": {
+  "ace:finer_offline_gt": 178,
+  "ace:finer_offline_gt_resume450": 68,
+  "ace:finer_offline_nogt": 95,
+  "ace:finer_offline_nogt_resume300": 58,
+  "teacher": 1768
+ },
+ "base_pass_mean": 0.27325,
+ "leak_rate": 0.6169820027688048
+}
