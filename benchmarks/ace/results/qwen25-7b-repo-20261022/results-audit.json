@@ -1,0 +1,107 @@
+{
+  "complete": true,
+  "results": [
+    {
+      "task": "formula",
+      "mode": "offline",
+      "label": "gt",
+      "metrics": {
+        "accuracy": 0.625,
+        "correct": 125,
+        "total": 200,
+        "no_answer": 3
+      },
+      "path": "formula_offline_gt_resume_331267/ace_run_20261021_235856_formula_offline/final_test_results.json",
+      "sha256": "dd0881e8fa567162301802d0f8e4e93bf52c22231f41ea4ec6e5cf6959e20bdd"
+    },
+    {
+      "task": "finer",
+      "mode": "offline",
+      "label": "nogt",
+      "metrics": {
+        "accuracy": 0.35090702947845803,
+        "correct": 28,
+        "total": 441,
+        "no_answer": 1
+      },
+      "path": "finer_offline_nogt_resume_331267/ace_run_20261021_235845_finer_offline/final_test_results.json",
+      "sha256": "dfcddec5b719963083550791809c8e154ab443c0954f83f49882c4308ac249d8"
+    },
+    {
+      "task": "finer",
+      "mode": "offline",
+      "label": "gt",
+      "metrics": {
+        "accuracy": 0.5175736961451247,
+        "correct": 67,
+        "total": 441,
+        "no_answer": 1
+      },
+      "path": "finer_offline_gt_resume_331267/ace_run_20261021_235840_finer_offline/final_test_results.json",
+      "sha256": "dc1b2af05a76fd452b5ecf7ab87395dbc8529c9c5ff4383cd3e6393293f34939"
+    },
+    {
+      "task": "formula",
+      "mode": "offline",
+      "label": "nogt",
+      "metrics": {
+        "accuracy": 0.59,
+        "correct": 118,
+        "total": 200,
+        "no_answer": 0
+      },
+      "path": "formula_offline_nogt_resume_331077/ace_run_20261021_210816_formula_offline/final_test_results.json",
+      "sha256": "caccdcd95f3d4c6f21440f7a87ffcbfaf133bbba4e5eb91cd7ece7fdec9955e4"
+    },
+    {
+      "task": "finer",
+      "mode": "online",
+      "label": "nogt",
+      "metrics": {
+        "accuracy": 0.32936507936507936,
+        "correct": 27,
+        "total": 441
+      },
+      "path": "finer_online_nogt_production_333683/ace_run_20261022_114801_finer_online/final_results.json",
+      "sha256": "c91c5bccb13b63222b71506c1971ec1c19d073416bf195015840f9bef3f627f2"
+    },
+    {
+      "task": "formula",
+      "mode": "online",
+      "label": "nogt",
+      "metrics": {
+        "accuracy": 0.605,
+        "correct": 121,
+        "total": 200
+      },
+      "path": "formula_online_nogt_production_331267/ace_run_20261021_235901_formula_online/final_results.json",
+      "sha256": "1bba8182f84cfb61e6b0a4d30d157308fce97d5f5ce12a7cf5798eb521dd8e70"
+    },
+    {
+      "task": "formula",
+      "mode": "online",
+      "label": "gt",
+      "metrics": {
+        "accuracy": 0.61,
+        "correct": 122,
+        "total": 200
+      },
+      "path": "formula_online_gt_production_331267/ace_run_20261022_005203_formula_online/final_results.json",
+      "sha256": "9422ec9c876a3af53decee52beb3ce0f711a35db76e6b7f6af2406dc52746a44"
+    },
+    {
+      "task": "finer",
+      "mode": "online",
+      "label": "gt",
+      "metrics": {
+        "accuracy": 0.481859410430839,
+        "correct": 65,
+        "total": 441
+      },
+      "path": "finer_online_gt_production_331267/ace_run_20261022_071059_finer_online/final_results.json",
+      "sha256": "bbdb89755ef86b5365e9f82751d331b688c7e4e475a0a3762f916ee89e6538b1"
+    }
+  ],
+  "path_base": "experiments/ciai-qwen25-7b/results/ace-repo-20261021/finance",
+  "raw_artifacts_included": false
+}

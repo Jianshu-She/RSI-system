@@ -10,6 +10,10 @@ Paired tests are two-sided sign tests on per-item correctness, using the same te
 (`+a/−b` means a items only this method gets right and b items only the comparison gets right). Each run is one temp-0 run.
 Identical temp-0 runs differ by up to about 1.5 pts because vLLM batching is not deterministic, so treat any gain below about 2 pts as noise.
 
+## Additional model reproduction
+
+The completed [Qwen2.5-7B-Instruct Finance reproduction](qwen25-7b-repo-20261022/README.md) reports all eight ACE offline/online results, repository-default configuration, comparison limits, and result-file hashes. It is separate from the Qwen3-32B results below.
+
 ## 1. Finance (Table 2): test accuracy %
 
 FiNER: 441 test items, scored per tag. Formula: 200 test items, exact float match. Base = the same model with an empty playbook, taken from each ACE run's initial test and averaged over 4 runs (Formula 69.5/69.0/69.0/68.0, FiNER 62.5/63.5/63.1/61.9).
