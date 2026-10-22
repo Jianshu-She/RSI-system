@@ -261,6 +261,20 @@ What does each cost in request completion time, and when is the trained adapter 
 - seq: hold arrivals, drain in-flight requests (≈ 2 s), train alone, then release the held requests.
 - Request completion = done − arrival.
 
+Figures (`python scripts/plot_rsi_poisson.py results/rsi_poisson_2026-10-20`):
+
+![timeline](rsi_poisson_2026-10-20/fig_timeline.png)
+
+*Top: completion time of each request by arrival time. Under seq, every request that arrives during the FT job
+(shaded) waits for it. Bottom: FT tokens trained over time. Under co, the FT rate drops as load rises; at 2 rps
+nothing trains until the traffic ends.*
+
+![cdf](rsi_poisson_2026-10-20/fig_cdf.png)
+
+![summary](rsi_poisson_2026-10-20/fig_summary.png)
+
+*The trade-off: co keeps p90 at 2.6–3.5 s, and the adapter is ready 140–309 s later.*
+
 | rate | mode | request completion p50 / p90 / p99 | mean | requests held (mean wait) | FT job time | adapter ready at | all done at | TTFT p50 / p99 |
 |---|---|---|---|---|---|---|---|---|
 | 0.5 | seq | 1.64 / 6.35 / **119.8 s** | 9.06 s | 51 (70.8 s) | 126 s | 246 s | 1,042 s | 36 / 517 ms |
