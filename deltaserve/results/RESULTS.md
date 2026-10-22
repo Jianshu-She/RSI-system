@@ -261,17 +261,30 @@ What does each cost in request completion time, and when is the trained adapter 
 - seq: hold arrivals, drain in-flight requests (≈ 2 s), train alone, then release the held requests.
 - Request completion = done − arrival.
 
-Figures (`python scripts/plot_rsi_poisson.py results/rsi_poisson_2026-10-20`):
+Figures (`python scripts/plot_rsi_poisson.py results/rsi_poisson_2026-10-20`; `plot_rsi_poisson_simple.py` for 5a).
+In every figure, orange = sequential (stop serving, train, resume) and blue = co-serving (DeltaServe).
 
-![timeline](rsi_poisson_2026-10-20/fig_timeline.png)
+**Fig 5a — start here.** One load (1 rps). Top: one dot per request; x = when it arrived, y = how long it waited
+for its answer. Bottom: training progress. Shaded: the 126 s that sequential stops serving to train.
+
+![Fig 5a](rsi_poisson_2026-10-20/fig_simple_r1.png)
+
+**Fig 5b** — the same for all three loads side by side (bottom: FT tokens trained, in thousands).
+
+![Fig 5b](rsi_poisson_2026-10-20/fig_timeline.png)
 
 *Top: completion time of each request by arrival time. Under seq, every request that arrives during the FT job
 (shaded) waits for it. Bottom: FT tokens trained over time. Under co, the FT rate drops as load rises; at 2 rps
 nothing trains until the traffic ends.*
 
-![cdf](rsi_poisson_2026-10-20/fig_cdf.png)
+**Fig 5c** — the fraction of requests done within x seconds (the further left, the better). The dot marks p90.
 
-![summary](rsi_poisson_2026-10-20/fig_summary.png)
+![Fig 5c](rsi_poisson_2026-10-20/fig_cdf.png)
+
+**Fig 5d** — summary. Left: request p90 (lower is better). Right: when the trained adapter is ready (lower is
+better).
+
+![Fig 5d](rsi_poisson_2026-10-20/fig_summary.png)
 
 *The trade-off: co keeps p90 at 2.6–3.5 s, and the adapter is ready 140–309 s later.*
 
@@ -351,11 +364,31 @@ its last answer.
 | 2 | seq | 1.77 / 3.28 / 124 | 29 (77 s) | 125 s | 246 s | 74.8 / 187 |
 | 2 | co | 1.70 / 2.69 / 5.6 | 0 | 272 s | 392 s | 25.0 / 100 |
 
-![1 rps](rsi_tracelab_2026-10-22/fig_simple_r1.png)
+Orange = sequential, blue = co-serving. Figs 6a–6c read like Fig 5a: top = how long each request waited, bottom =
+training progress, shaded = the time sequential stops serving.
 
-![tasks](rsi_tracelab_2026-10-22/fig_tasks.png)
+**Fig 6a — 0.5 rps.** The pause fell in a quiet stretch: only 1 request arrived during it (the lone orange dot at
+127 s). Co-serving trains at about half speed and finishes at 374 s, vs 247 s.
 
-(Also `fig_simple_r{0.5,2}.png`, `fig_timeline.png`, `fig_cdf.png` and `fig_summary.png` in the folder.)
+![Fig 6a](rsi_tracelab_2026-10-22/fig_simple_r0.5.png)
+
+**Fig 6b — 1 rps.** 13 requests are held for up to 128 s under sequential; under co-serving none waits more than
+7 s. But the blue training line is mostly flat while serving and finishes only after the traffic ends (611 s).
+
+![Fig 6b](rsi_tracelab_2026-10-22/fig_simple_r1.png)
+
+**Fig 6c — 2 rps.** 29 requests are held under sequential. Co-serving trains nothing until the traffic ends at
+about 270 s (a flat blue line), then finishes at 392 s.
+
+![Fig 6c](rsi_tracelab_2026-10-22/fig_simple_r2.png)
+
+**Fig 6d — agent task completion time** (a task = one user request plus the agent's tool loop that follows it;
+time from its first request to its last answer). Left: median; right: p90; lower is better. The more load, the
+more co-serving wins, because one held request stalls its whole task.
+
+![Fig 6d](rsi_tracelab_2026-10-22/fig_tasks.png)
+
+(The all-loads versions are `fig_timeline.png`, `fig_cdf.png` and `fig_summary.png` in the folder.)
 
 **What it shows:**
 - **Stopping to train hurts far fewer requests than under Poisson:** 1 / 13 / 29 held, vs 51 / 135 / 249. A held
