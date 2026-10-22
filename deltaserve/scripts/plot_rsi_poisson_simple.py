@@ -19,7 +19,7 @@ for m in ("seq", "co"):
     ax[1].plot(np.r_[v[m]["ft"]["t_ft_start"], v[m]["bt"]], np.r_[0, 100 * v[m]["btok"] / v[m]["btok"][-1]],
                color=COLOR[m], lw=2.5, drawstyle="steps-post", label=name[m])
     t = v[m]["ft"]["t_ft_end"]
-    ax[1].annotate(f"done at {t:.0f} s", (t, 100), textcoords="offset points", xytext=(4, -14),
+    ax[1].annotate(f"done at {t:.0f} s", (t, 100), textcoords="offset points", xytext=(-8, 0) if m == "seq" else (6, -34), ha="right" if m == "seq" else "left",
                    color=COLOR[m], fontsize=9, fontweight="bold")
 s = v["seq"]["ft"]
 for a in ax:
@@ -34,8 +34,8 @@ ax[0].set_title(f"{rate} request/s ({arrivals}); a training job starts at t = 12
 ax[0].legend(frameon=False, loc="upper right", fontsize=8.5, markerscale=2)
 ax[1].set_ylabel("training progress (%)")
 ax[1].set_xlabel("time (s)")
-ax[1].text(0.01, 0.55, "Co-serving trains slowly\nwhile users are being served\n(our scheduler is\ntoo conservative)",
-           transform=ax[1].transAxes, color=MUTED, fontsize=9)
+ax[1].set_title("flat blue = co-serving is not training while it serves (our scheduler is too conservative)",
+                fontsize=9, color=MUTED, loc="left")
 fig.tight_layout()
 fig.savefig(f"{run}/fig_simple_r{rate}.png", dpi=160)
 print(f"{run}/fig_simple_r{rate}.png")
