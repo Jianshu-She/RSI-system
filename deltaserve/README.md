@@ -142,6 +142,27 @@ python3 deltaserve/scripts/rsi_poisson_metrics.py deltaserve/work/runs/rsip   # 
 `rsi_traffic.py --train-at T --train-mode {co,seq} --ft-final <final adapter file>` drives the FT job from the traffic
 client. Results: [results/RESULTS.md §5](results/RESULTS.md).
 
+### The same, with TraceLab session timing instead of per-request Poisson
+```bash
+DB=<TraceLab syfi_coding_trace.duckdb>   # needs duckdb
+for x in "0.5 0.0308" "1 0.0686" "2 0.147"; do set -- $x   # session rate chosen so the first 500 requests average $1 rps
+  python deltaserve/scripts/agent_trace.py --db $DB --sessions 60 --rate $2 --out deltaserve/work/runs/rsit/workload_r$1.json
+done
+export DATA=<the loop's sft_from_traces.jsonl> EPOCHS=2 TRAIN_AT=120
+for r in 0.5 1 2; do
+  export RATE=$r WORKLOAD=deltaserve/work/runs/rsit/workload_r$r.json
+  DSERVE_BACKWARD_NCCL_PORT=29677 bash deltaserve/scripts/rsi_poisson.sh co  0,1,2,3 8000 deltaserve/work/runs/rsit/co_r$r &
+  DSERVE_BACKWARD_NCCL_PORT=29777 bash deltaserve/scripts/rsi_poisson.sh seq 4,5,6,7 8100 deltaserve/work/runs/rsit/seq_r$r &
+  wait
+done
+python3 deltaserve/scripts/rsi_poisson_metrics.py deltaserve/work/runs/rsit       # + task completion table
+python3 deltaserve/scripts/plot_rsi_poisson.py deltaserve/work/runs/rsit          # fig_{timeline,cdf,summary,tasks}.png
+(cd deltaserve/scripts && python3 plot_rsi_poisson_simple.py ../work/runs/rsit 1 "TraceLab session timing")  # fig_simple_r1.png
+```
+Sessions arrive Poisson (TraceLab's own simulator does this: the corpus records no arrival process). Inside a
+session, each round waits its real gap (tool latency or human think time), sends the next ACE request, and waits
+for the answer. Results: [results/RESULTS.md §6](results/RESULTS.md).
+
 ### Sequential vs co-serving on a coding-agent workload (TraceLab)
 ```bash
 # workload: real Claude Code sessions from the TraceLab trace (download the DuckDB from github.com/uw-syfi/TraceLab releases)

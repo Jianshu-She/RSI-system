@@ -324,6 +324,48 @@ Caveats:
 - The bug "FT starts at launch under TP" was fixed before these runs (`v1/worker/gpu_worker.py`). The first attempt,
   which trained from launch, is not reported.
 
+## 6. The same with TraceLab session timing (`rsi_poisson.sh` + `WORKLOAD`; `rsi_tracelab_2026-10-22/`)
+
+**Why:** §5 sends every request as an independent Poisson arrival. Real agent traffic does not look like that.
+TraceLab has no session-arrival process (its simulator synthesizes Poisson session arrivals), but it does record
+the timing inside each session:
+- per-user inter-request gaps: p50 7.4 s, p90 58 s;
+- an active user sends ≈ 0.03 req/s;
+- the aggregate gap CV is 28 (Poisson = 1).
+
+**Setup:** same as §5, with one change:
+- sessions arrive Poisson (`agent_trace.py`, seed 0);
+- in each session, every round waits its real TraceLab gap (capped at 300 s), sends the next ACE question, and
+  waits for its answer.
+
+The session rate is set so the 500 requests average 0.47 / 0.98 / 1.88 rps. The 0.5 rps arrivals are burstier
+than Poisson (gap CV 1.9). A *task* is a user round plus its tool loop; task time runs from its first arrival to
+its last answer.
+
+| rps | mode | request p50 / p90 / p99 (s) | held (mean wait) | FT time | adapter ready | task p50 / p90 (s) |
+|---|---|---|---|---|---|---|
+| 0.5 | seq | 1.58 / 2.39 / 6.1 | 1 (125 s) | 125 s | 247 s | 29.8 / 231 |
+| 0.5 | co | 1.60 / 2.54 / 5.2 | 0 | 254 s | 374 s | 29.6 / 212 |
+| 1 | seq | 1.62 / 2.76 / 106 | 13 (77 s) | 126 s | 247 s | 36.2 / 222 |
+| 1 | co | 1.60 / 2.56 / 5.9 | 0 | 491 s | 611 s | 25.9 / 135 |
+| 2 | seq | 1.77 / 3.28 / 124 | 29 (77 s) | 125 s | 246 s | 74.8 / 187 |
+| 2 | co | 1.70 / 2.69 / 5.6 | 0 | 272 s | 392 s | 25.0 / 100 |
+
+![1 rps](rsi_tracelab_2026-10-22/fig_simple_r1.png)
+
+![tasks](rsi_tracelab_2026-10-22/fig_tasks.png)
+
+(Also `fig_simple_r{0.5,2}.png`, `fig_timeline.png`, `fig_cdf.png` and `fig_summary.png` in the folder.)
+
+**What it shows:**
+- **Stopping to train hurts far fewer requests than under Poisson:** 1 / 13 / 29 held, vs 51 / 135 / 249. A held
+  request stalls its whole session, so no backlog builds, and seq's request p90 stays at 2.4–3.3 s.
+- **The cost moves to the task.** A task with one held request waits the whole FT job. At 2 rps, seq task p50 is
+  75 s vs 25 s under co (p90 187 vs 100 s). At 0.5 rps the pause fell in a quiet stretch and the two tie.
+- **Co-serving still trains slowly.** It trained at 50 % / 7 % / 0 % of standalone speed while serving, so the
+  adapter is ready 127–364 s later than seq. At 1 and 2 rps most or all of the FT ran after the traffic ended.
+  This is the same admission bottleneck as §5: the 0.1 s RPS throttle and the all-or-nothing 16K FT forward.
+
 ## Caveats
 
 - Single runs, temperature 0. Differences below ~3 points (n=200) are noise.

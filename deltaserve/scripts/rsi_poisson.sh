@@ -8,6 +8,7 @@
 # Both modes use the same server config (train_only.yaml + the SLO profiling pass), so the engine is identical.
 # Usage: rsi_poisson.sh <co|seq> <gpus> <port> <out_dir>
 #   env: RATE (0.5) DATA EPOCHS (2) TRAIN_AT (120) SPLIT (train) DSERVE_BACKWARD_NCCL_PORT (one per server on a node)
+#   WORKLOAD: an agent_trace.py JSON -> TraceLab session timing instead of per-request Poisson at RATE
 set -u
 source "$(dirname "$(readlink -f "$0")")/../env.sh"; ds_activate
 MODE=$1; GPUS=$2; PORT=$3; OUT=$4; RATE=${RATE:-0.5}; EPOCHS=${EPOCHS:-2}; TRAIN_AT=${TRAIN_AT:-120}
@@ -27,7 +28,7 @@ until curl -s -o /dev/null $URL/health; do sleep 10; kill -0 $L 2>/dev/null || {
 T "server up: $(grep -o 'GPU KV cache size: [0-9,]* tokens' $OUT/server.log | head -1)"
 setsid bash $DS_HOME/scripts/gpu_monitor.sh $OUT/gpu.txt & GM=$!
 (cd $ACE_UPSTREAM_DIR && $ACE_PY $DS_HOME/scripts/rsi_traffic.py --url $URL/v1 --model $DS_MODEL_NAME --task formula \
-    --split $SPLIT --rps $RATE --train-at $TRAIN_AT --train-mode $MODE \
+    --split $SPLIT --rps $RATE ${WORKLOAD:+--workload $WORKLOAD} --train-at $TRAIN_AT --train-mode $MODE \
     --ft-final $OUT/adapters/final/adapter_model.safetensors --out $OUT/traffic.jsonl) | tail -1 | tee -a $OUT/driver.log
 kill -- -$GM 2>/dev/null
 SPID=$(pgrep -f "dserve-vllm serve.*$OUT/bwd.csv" | head -1)

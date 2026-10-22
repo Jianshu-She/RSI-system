@@ -1,4 +1,4 @@
-# RSI traffic (ACE formula, Poisson) + the RSI FT job: sequential vs co-serving
+# RSI traffic (ACE formula) + the RSI FT job: sequential vs co-serving
 
 | rate | mode | request completion p50 / p90 / p99 (s) | mean | held (mean wait) | FT time | FT done at | all done at | TTFT p50 / p99 (ms) | correct |
 |---|---|---|---|---|---|---|---|---|---|

@@ -31,10 +31,16 @@ def load(d):
     t0 = ft["t_start"]
     rs = [r for r in rs if not r["error"]]
     bwd = list(csv.DictReader(open(f"{d}/bwd.csv")))
+    tasks = {}
+    for r in rs:
+        if "session" in r:
+            a, b = tasks.get((r["session"], r["task"]), (1e18, 0))
+            tasks[(r["session"], r["task"])] = (min(a, r["t_arrive"]), max(b, r["t_arrive"] + r["latency"]))
     bt = [datetime.datetime.fromisoformat(b["timestamp"]).timestamp() - t0 for b in bwd]
     btok = [int(b["total_processed_tokens"]) for b in bwd]
     return {"arr": np.array([r["t_arrive"] - t0 for r in rs]), "lat": np.array([r["latency"] for r in rs]),
-            "bt": np.array(bt), "btok": np.array(btok) / 1e3, "ft": {k: v - t0 for k, v in ft.items() if k.startswith("t_")}}
+            "bt": np.array(bt), "btok": np.array(btok) / 1e3,
+            "task": np.array([b - a for a, b in tasks.values()]), "ft": {k: v - t0 for k, v in ft.items() if k.startswith("t_")}}
 
 
 def main():
@@ -111,7 +117,24 @@ def main():
     ax[0].legend(frameon=False, fontsize=7.5, loc="upper left")
     fig.tight_layout()
     fig.savefig(f"{run}/fig_summary.png", dpi=160)
-    print("wrote", *(f"{run}/fig_{n}.png" for n in ("timeline", "cdf", "summary")))
+    names = ["timeline", "cdf", "summary"]
+
+    # 4. agent tasks (TraceLab-timed runs only): a user round + its tool loop, first arrival -> last answer
+    if all(len(res[r][m]["task"]) for r in rates for m in ("seq", "co")):
+        fig, ax = plt.subplots(1, 2, figsize=(8.4, 3.0), sharey=True)
+        for a, q in zip(ax, (50, 90)):
+            for k, mode in enumerate(("seq", "co")):
+                vals = [np.percentile(res[r][mode]["task"], q) for r in rates]
+                b = a.bar(x + (k - 0.5) * (w + 0.02), vals, w, color=COLOR[mode], label=LABEL[mode])
+                a.bar_label(b, [f"{v:.0f}" for v in vals], fontsize=7.5, color=INK, padding=2)
+            a.set_title(f"agent task completion p{q} (s): lower is better", fontsize=9.5, color=INK)
+            a.set_xticks(x, [f"{r} rps" for r in rates])
+            a.grid(axis="x", visible=False)
+        ax[0].legend(frameon=False, fontsize=7.5, loc="upper left")
+        fig.tight_layout()
+        fig.savefig(f"{run}/fig_tasks.png", dpi=160)
+        names.append("tasks")
+    print("wrote", *(f"{run}/fig_{n}.png" for n in names))
 
 
 if __name__ == "__main__":

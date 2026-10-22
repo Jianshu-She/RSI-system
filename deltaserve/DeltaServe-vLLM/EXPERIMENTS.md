@@ -560,3 +560,61 @@
   - DeltaServe's FT share collapses with load (0 % at 2 rps on 4×H200 with ACE prompts). This is the same
     fragmented-gap problem as agent-1.
   - The next lever is still FT steps sized to the gaps, plus revisiting the 0.1 s-window RPS throttle.
+
+### rsi-tracelab — RSI traffic with TraceLab session timing: stop serving to train vs co-serving   (2026-10-22, fs-mbz-gpu-198 ×8: co on 0-3, seq on 4-7)
+- Reflection/audit: rsi-poisson (2026-10-20) sent each ACE request as an independent Poisson arrival. The user asked
+  for request arrivals that follow TraceLab. Checked TraceLab: the corpus records no session arrival process
+  (csv_export: "session arrival times are synthetic"); what it does record is per-session timing. The real
+  per-user inter-request gaps are p50 7.4 s, p90 58 s; an active user sends ~0.03 req/s; the aggregate gap CV is 28
+  (Poisson = 1). So: sessions arrive Poisson (as TraceLab's simulator does), and inside a session every round waits its
+  real TraceLab gap (tool latency / human think time, capped at 300 s), then sends the next ACE request and waits for
+  its answer. Mean request rate matched to rsi-poisson (0.5 / 1 / 2 rps) by the session rate, so the only change vs
+  rsi-poisson is the arrival shape. The FT admission scheduler is unchanged (the user: fix "too conservative" later),
+  so this run measures the workload, not a scheduler fix.
+- Goal/criteria (same as rsi-poisson): co request-completion p90 < seq p90 at every rate; co FT time ≤ 3× seq FT time.
+  Also report per-task completion (a user round + its tool loop), since a held request now stalls its whole session.
+- Workload: `agent_trace.py --db syfi_coding_trace.duckdb --sessions 60 --rate {0.0308,0.0686,0.147} --seed 0`
+  (scale/caps default) -> `work/runs/rsit/workload_r{0.5,1,2}.json`. With 2 s responses this gives the first 500
+  requests at 0.47 / 0.98 / 1.88 rps; gap CV 1.86 / 0.83 / 1.04; peak 10-s rate 1.5 / 2.4 / 3.7 rps; 33 / 36 / 41 sessions.
+  ACE formula train split, 500 requests, each sent once in order across sessions.
+- Command: `work/rsit.sh` = for r in 0.5 1 2: `RATE=$r WORKLOAD=work/runs/rsit/workload_r$r.json
+  DATA=work/runs/paper1/sft_from_traces.jsonl EPOCHS=2 TRAIN_AT=120 scripts/rsi_poisson.sh {co 0,1,2,3 8000 |
+  seq 4,5,6,7 8100} work/runs/rsit/{co,seq}_r$r` (backward NCCL ports 29677 / 29777). Same server config as
+  rsi-poisson (train_only.yaml + profile_on_launch, Qwen3-32B YaRN TP=4, FT 427 trajectories × 2 = 526K tokens).
+- Predicted:
+  - seq: FT ≈ 126 s at every rate. Fewer requests held than rsi-poisson, because a held request stalls its session
+    (closed loop), but held tasks take ≥ 60 s longer.
+  - co: p90 ≈ 3–4 s at every rate. 0.5 rps is burstier (CV 1.9), so the idle gaps are longer and the FT share is a
+    bit higher than rsi-poisson's 41 % (adapter ready ≈ 350–420 s). At 1 and 2 rps the shape is near-Poisson, so
+    expect the same collapse (≈ 20 % and ≈ 0 %).
+  - Criterion 1 PASS at all rates. Criterion 2 likely FAILS at 1 rps again.
+  - FALSIFIED if co p90 > 10 s at any rate (bursts break the SLO gate), or if co FT share at 2 rps is > 20 % (the
+    bursts leave usable gaps that Poisson did not).
+- Actual (2026-10-22, all 6 cells, 500/500 answered, 0 errors; accuracy 343–348/500 everywhere):
+
+  | rps | mode | request p50 / p90 / p99 (s) | held (mean wait) | FT time | adapter ready | task p50 / p90 (s) |
+  |---|---|---|---|---|---|---|
+  | 0.5 | seq | 1.58 / 2.39 / 6.1 | 1 (125 s) | 125 s | 247 s | 29.8 / 231 |
+  | 0.5 | co | 1.60 / 2.54 / 5.2 | 0 | 254 s | 374 s | 29.6 / 212 |
+  | 1 | seq | 1.62 / 2.76 / 106 | 13 (77 s) | 126 s | 247 s | 36.2 / 222 |
+  | 1 | co | 1.60 / 2.56 / 5.9 | 0 | 491 s | 611 s | 25.9 / 135 |
+  | 2 | seq | 1.77 / 3.28 / 124 | 29 (77 s) | 125 s | 246 s | 74.8 / 187 |
+  | 2 | co | 1.70 / 2.69 / 5.6 | 0 | 272 s | 392 s | 25.0 / 100 |
+
+  - Co FT trained during traffic: 50 % / 7 % / 0 % of standalone speed. At 1 and 2 rps, most or all of the FT
+    ran after the traffic ended.
+  - Criterion 1 (co request p90 < seq): FAIL at 0.5 (2.54 vs 2.39 s, a tie: 1 request was held); PASS at 1 and 2.
+  - Criterion 2 (co FT ≤ 3× seq): PASS at 0.5 (2.0×) and 2 (2.2×, but only because the traffic ended); FAIL at 1
+    (3.9×).
+  - Predictions: seq held fewer than under Poisson ✓ (1 / 13 / 29 vs 51 / 135 / 249: a held request stalls its
+    session, so the backlog does not grow). Co p90 2.5–2.7 s, better than predicted. FT share at 0.5 ✓ (50 % vs
+    the predicted > 41 %). At 1 rps it was worse than predicted (7 % vs ≈ 20 %). At 2 rps ✓ (0 %). Neither
+    falsifier fired.
+  - Insight: with agent sessions, the cost of stopping to train shows up per task, not per request. Most
+    requests are untouched, but a task whose request is held stalls its whole tool loop: seq task p50 75 s vs
+    co 25 s at 2 rps, and p90 187 vs 100 s. Co-serving still does not use the gaps: the 1 rps run trained 7 %
+    while serving.
+  - Cell-to-cell variation: which ACE question lands in which session depends on response timing, so the task
+    counts differ slightly (45 / 43 / 47 vs 45 / 43 / 45).
+- Decision: report to the user. The scheduler fix (gap-sized FT steps plus the RPS throttle) is the next lever,
+  on the user's go.

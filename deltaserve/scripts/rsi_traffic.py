@@ -15,6 +15,10 @@ trace), correctness, and timing. Run with the ACE venv python from the ACE upstr
   #   --train-mode seq  stop serving: hold new arrivals, drain in-flight requests, train alone until --ft-final
   #                     exists, then release the held requests (time-disaggregated, one set of GPUs)
   #   Each record then has t_arrive and latency = done - arrival (incl. the hold); <out>.ft.json the FT times.
+  # TraceLab-shaped arrivals instead of per-request Poisson:  --workload agent_workload.json (agent_trace.py)
+  #   sessions arrive at their (Poisson) arrival times; each round waits its real TraceLab gap (tool latency / human
+  #   think time), then sends the next ACE request and waits for its answer (closed loop within a session).
+  #   Records then also carry session / round / task / kind.
 """
 import argparse
 import asyncio
@@ -40,7 +44,7 @@ def load_samples(task, split):
     return proc, proc.process_task_data([json.loads(l) for l in open(cfg[key])])
 
 
-async def one(client, args, proc, playbook, i, s, out, lock, stats):
+async def one(client, args, proc, playbook, i, s, out, lock, stats, tag=None):
     prompt = GENERATOR_PROMPT.format(playbook, "(empty)", s["question"], s["context"])
     t_arrive = time.time()
     await stats["gate"].wait()  # closed only while a sequential FT job holds the GPUs
@@ -78,7 +82,7 @@ async def one(client, args, proc, playbook, i, s, out, lock, stats):
            "tbt_gaps": [round(g, 5) for g in gaps] if args.save_gaps else None,
            "prompt_tokens": usage.prompt_tokens if usage else None,
            "completion_tokens": usage.completion_tokens if usage else None, "correct": correct, "error": err, "prompt": prompt, "response": resp,
-           "question": s["question"], "context": s["context"], "target": s["target"]}
+           "question": s["question"], "context": s["context"], "target": s["target"], **(tag or {})}
     async with lock:
         out.write(json.dumps(rec) + "\n")
         out.flush()
@@ -105,6 +109,7 @@ async def main():
     ap.add_argument("--train-at", type=float, default=-1, help="start the FT job at this many s (open loop)")
     ap.add_argument("--train-mode", choices=["co", "seq"], default="co")
     ap.add_argument("--ft-final", default="", help="file whose existence means the FT job is done")
+    ap.add_argument("--workload", default="", help="agent_trace.py JSON: TraceLab session timing (open loop only)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     proc, samples = load_samples(args.task, args.split)
@@ -148,6 +153,30 @@ async def main():
                 async with sem:
                     await one(client, args, proc, playbook, i, s, out, lock, stats)
             await asyncio.gather(*(bounded(i, s) for i, s in enumerate(samples)))
+        elif args.workload:
+            nxt = iter(range(len(samples)))  # every ACE request is sent once, in order, across the sessions
+            used_up = asyncio.Event()  # the last request is out: waiting sessions stop instead of sleeping on
+
+            async def nap(dt):
+                try:
+                    await asyncio.wait_for(used_up.wait(), max(0.0, dt))
+                except asyncio.TimeoutError:
+                    pass
+
+            async def agent_session(w):
+                await nap(t_start + w["arrival"] - time.time())
+                task = -1
+                for k, r in enumerate(w["rounds"]):
+                    await nap(r["wait"])
+                    i = None if used_up.is_set() else next(nxt, None)
+                    if i is None:
+                        return
+                    if i == len(samples) - 1:
+                        used_up.set()
+                    task += r["kind"] == "user"
+                    await one(client, args, proc, playbook, i, samples[i], out, lock, stats,
+                              {"session": w["id"], "round": k, "task": task, "kind": r["kind"]})
+            await asyncio.gather(*(agent_session(w) for w in json.load(open(args.workload))["sessions"]))
         else:
             rng = random.Random(args.seed)
             tasks = []
