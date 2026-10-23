@@ -68,3 +68,7 @@ an offset-0 site. All earlier runs had working search (0–3 empty searches out 
 
 Raw per-run numbers: `final_test.json`. Full chronological log with every run spec, prediction and incident:
 `EXPERIMENT_LOG.md`.
+
+## Completed 7B / 8B reproduction
+
+See [full 187-task results and audit](qwen-7b-8b-187-20261022/README.md).
