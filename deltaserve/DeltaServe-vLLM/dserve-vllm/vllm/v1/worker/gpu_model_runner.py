@@ -4576,8 +4576,11 @@ class GPUModelRunner(
             if _feats is not None and (
                     coord.pending_backward
                     or self.vllm_config.finetune_config.pause_prefill_always):
-                _pause_prefill = _feats.t_in > 0
                 _ft_cfg = self.vllm_config.finetune_config
+                _min_pf = int(_ft_cfg.pause_min_prefill_tokens)
+                _pause_prefill = (
+                    _feats.t_in > 0 if _min_pf <= 0
+                    else int(_feats.t_in) - int(_feats.t_ft) >= _min_pf)
                 # Count only inference work: an FT-only step must release
                 # the throttle, while threshold zero protects even one decode.
                 _total = (int(_feats.t_in) - int(_feats.t_ft)

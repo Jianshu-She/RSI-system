@@ -618,3 +618,212 @@
     counts differ slightly (45 / 43 / 47 vs 45 / 43 / 45).
 - Decision: report to the user. The scheduler fix (gap-sized FT steps plus the RPS throttle) is the next lever,
   on the user's go.
+
+### rsi-tracelab-ride — the co-serving half of rsi-tracelab with DeltaServe's standard FT admission   (2026-10-22, fs-mbz-gpu-198 ×8)
+- Reflection/audit: rsi-tracelab's co-serving trained only 50 / 7 / 0 % of standalone speed while serving. The user
+  asked why DeltaServe's scheduler did not train during serving; that is its whole purpose. The audit found the
+  cause in our config, not in DeltaServe. Every RSI config since 2026-10-19 (train_only.yaml, rsi_e2e, rsi_ace)
+  inherited two settings from the 16K long-context config (qwen3_32b_tp4_16k):
+  1. `ft_tokens_admission_constrain_factor: 0`: an FT sample may never ride an inference prefill step. FT runs only
+     in fully idle steps.
+  2. The RPS throttle (0.1 s window, close at 5 rps, 1 s hold): any single arrival reads as 10 rps and closes FT.
+
+  Those settings made sense for 16K-token samples, which cannot share a step without blowing TTFT. The RSI samples
+  are 502–907 tokens (ft-store log). The validated Qwen3-14B config uses factor -1 (the SLO estimator decides) and no
+  throttle. So rsi-poisson and rsi-tracelab measured DeltaServe with its core mechanism off. This run measures it on.
+- Change vs rsi-tracelab, co only: `FT_ADMIT=ride` -> `ft_tokens_admission_constrain_factor: -1`,
+  `rps_throttle_enable: false`. Everything else is identical: workloads, ACE requests, FT data, 16K activation
+  buffer, 16K tokens per optimizer step, SLO (ttft 0.3, max_tbt 0.05), forward_interruptible, admission phase
+  "prefill". The seq baseline is reused from rsi-tracelab: there FT runs alone, so neither setting is active.
+- Command: `work/rsit2.sh`:
+  - 0.5 rps on GPUs 0-3 (port 8000, NCCL 29677) and 1 rps on GPUs 4-7 (port 8100, NCCL 29777), in parallel;
+  - then 2 rps on GPUs 0-3;
+  - each: `FT_ADMIT=ride RATE=$r WORKLOAD=work/runs/rsit/workload_r$r.json DATA=work/runs/paper1/sft_from_traces.jsonl
+    EPOCHS=2 TRAIN_AT=120 scripts/rsi_poisson.sh co <gpus> <port> work/runs/rsit2/co_r$r`.
+- Criteria:
+  - (1) co request p90 ≤ 4 s at every rate (rsi-tracelab co: 2.5–2.7 s; seq: 2.4–3.3 s).
+  - (2) co FT trained during traffic ≥ 40 % of standalone at 1 rps (was 7 %).
+  - (3) adapter ready ≤ 1.5× seq's at every rate (seq ≈ 247 s -> ≤ 370 s).
+- Predicted:
+  - FT share during traffic ≈ 80 / 50 / 30 % at 0.5 / 1 / 2 rps.
+  - Adapter ready ≈ 290 / 360 / 380 s. At 2 rps the 500 requests end at about 270 s, so its tail still trains
+    alone after the traffic.
+  - Request p90 ≈ 3 s (the estimator holds each step inside the TTFT SLO). TTFT p99 rises toward the SLO (≈ 0.3 s).
+  - FALSIFIED if FT share at 1 rps < 25 % (then the bottleneck is elsewhere: the backward child, the pause contract,
+    or tier-C aborts) or if request p90 > 5 s (riding costs the users).
+- Actual (work/runs/ridecmp = rsit seq + rsit2 co, `rsi_poisson_metrics.py`):
+  - adapter ready 378 / 617 / 391 s at 0.5 / 1 / 2 rps (rsi-tracelab co with the switches off: 374 / 611 / 392; seq
+    247 / 247 / 246). Identical to the switches-off run within noise.
+  - request p90 2.52 / 2.58 / 2.50 s (seq 2.39 / 2.76 / 3.28); TTFT p99 86 / 174 / 52 ms; max-TBT p99 ≤ 50 ms.
+  - At 1 rps FT reached ~64K tokens after ~3 min of traffic (≈ 6-10 % of standalone), 63 tier-C aborts; the
+    server log shows no FT sample on any inference step, only FT-only 16K forwards in idle gaps.
+  - accuracy 346 / 345 / 341 of 500 (unchanged).
+  - Criteria: (1) PASS, (2) FAIL (≈ 6-10 % at 1 rps), (3) FAIL at 1 rps (617 s > 370 s). FALSIFIED.
+- Decision: the two switches were not the binding constraint. The prompts are ~390 tokens and a prefill step is
+  ~38 ms, so with max_tbt_slo 0.05 s and phase "prefill" (decode-only steps admit nothing) almost no step has room
+  for a 500-900-token sample. Next run (rsi-mix) relaxes the SLO (ttft 0.5, max_tbt 0.2 = DeltaServe's default) and
+  uses phase "both", and at the same time makes the workload less thin (mixed formula + finer traffic, 4 FT rounds)
+  and adds the vLLM + torchtune baseline the user asked for.
+
+### rsi-mix — mixed RSI traffic (formula + finer) + 4 FT rounds: seq vs DeltaServe co-serving (relaxed SLO) vs vLLM+torchtune   (2026-10-26, fs-mbz-gpu-198 ×8 H200, job 2721371)
+- Reflection/audit: rsi-poisson / rsi-tracelab / rsi-tracelab-ride all found DeltaServe co-serving barely trains
+  under traffic (≈ 6-10 % of standalone at 1 rps). ride showed the factor-0 / RPS-throttle switches were not the
+  cause; the binding constraint is the SLO + admission phase (max_tbt 0.05 s vs a ~38 ms prefill step; decode-only
+  steps admit nothing under phase "prefill"). The user also called the experiments thin (one task, one FT job,
+  no external baseline) and asked for (a) a relaxed SLO, (b) several FT rounds per run, (c) finer + formula
+  together, (d) a comparison with vLLM + torchtune (DeltaServe-Baselines).
+- What changed vs rsi-tracelab:
+  - traffic: ACE formula + finer train splits interleaved 1:2 (500 + 1000 requests; finer prompts ~1.8K tokens,
+    formula ~390), TraceLab session timing (agent_trace.py: r1 = 200 sessions @ 0.072/s ≈ 1.0 rps, r2 = 300 @ 0.15/s
+    ≈ 2.1 rps over 750 s), sending stops at 750 s (or when the 1500 requests are used up).
+  - FT: 4 rounds (rsi_mix_prep.py: round k = chunk k of formula traces SFT (427 rows) + chunk k of data_v2/finer
+    (277 rows); 172 samples / ~230K tokens each, 1 epoch), started at 120 / 270 / 420 / 570 s. DeltaServe: round 0
+    = launch corpus + /start_finetuning, rounds 1-3 POST /ft/ingest. Round k "done" = cumulative trained input
+    tokens reach rounds 0..k.
+  - DeltaServe co: ttft_slo 0.5, max_tbt_slo 0.2 (DeltaServe default), coserving_admission_phase both, factor -1,
+    no RPS throttle. seq: same server, FT alone per round (traffic held).
+  - tt: stock vLLM 0.21.0 (baseline-vllm venv, plain Qwen3-32B, TP=4, gpu_mem 0.45, LoRA on, max_num_batched 16384,
+    long_prefill 2048, MPS 80 %) + torchtune 0.6.1 lora_finetune_distributed (FSDP 4 ranks, batch 1/rank, its own
+    weights, activation checkpointing, MPS 20 %), same LoRA recipe (qkvo r16 a32, lr 1e-4 constant, wd 0), the same
+    rendered + masked samples (tt_rsi.rounds_dataset; a round's samples block until the driver releases it).
+    Caveats: plain RoPE vs DeltaServe's YaRN config (no compute difference at these lengths); different engine
+    version (0.21.0 vs our 0.21.1rc0 fork); torchtune steps every 4 samples, DeltaServe every 16K tokens.
+- Standalone FT (measured): torchtune alone on GPUs 4-7, all 4 rounds: 5.3K tok/s. DeltaServe's from the seq cells.
+- Command: `ROUNDS=work/runs/rsimix/rounds WORKLOAD=work/runs/rsimix/workload_r$r.json [TTFT_SLO=0.5 MAX_TBT_SLO=0.2
+  PHASE=both] scripts/rsi_mix.sh <seq|co|tt> <gpus> <port> work/runs/rsimix/<cell>_r$r` via work/rsimix.sh
+  (batch 1: co r1 on 0-3 + tt r1 on 4-7; batch 2: seq r1 + co r2; batch 3: seq r2 + tt r2).
+- Criteria:
+  - (1) co FT share during traffic at 1 rps ≥ 40 % (was 6-10 %).
+  - (2) co mean round wait ≤ 150 s (keeps up with a round every 150 s) at 1 rps.
+  - (3) co request p90 < seq request p90, and co agent-task p90 < seq's (seq holds traffic ~4 × 60 s).
+  - (4) co beats tt on mean round wait at equal or better request p90.
+- Predicted:
+  - seq: round wait ≈ 60 s (230K / ~4.5K tok/s + drain); request p90 ≈ 20-40 s at 2 rps from the holds.
+  - co: FT share ≈ 50 % at 1 rps, 30 % at 2 rps; round wait ≈ 100 / 160 s; request p90 within 1.3× co-strict
+    (≈ 3-5 s on this longer traffic); max-TBT p99 rises to ~150-200 ms (the price of max_tbt 0.2).
+  - tt: torchtune at a 20 % SM cap ≈ 25-35 % of its 5.3K under traffic -> round wait ≈ 150-250 s (falls behind);
+    request p90 ≈ 1.2-1.5× co (vLLM at an 80 % SM cap plus memory-bandwidth contention).
+  - FALSIFIED if co FT share at 1 rps < 25 %, or co request p90 > 2× co's TTFT-only change would explain, i.e. > 8 s.
+- Incidents (all invalid cells kept under work/runs/rsimix/{prefix,tt_failed,confounded}):
+  - editing rsi_mix.sh while a cell ran it broke batch 1 (bash reads scripts lazily); teardown did not kill the
+    DeltaServe serve process (own session), so the next cell's health check hit the old server; the fixed teardown
+    then killed the batch's process group once. Fixed: cleanup scoped to the cell's out-dir/port.
+  - vLLM under MPS: a client cap of 60/75/80/85 % (and 70 % on the full model) makes cuBLAS bf16 GEMMs (torch
+    2.11 + cu129) return garbage ("!!!!" outputs); 100 % + torchtune 20 % deadlocked vLLM's TP all-reduce once
+    torchtune trained. The vLLM+torchtune baseline therefore runs time-sliced (no MPS), like DeltaServe's child.
+    (DeltaServe-Baselines' 80/20 results on fs-mbz-gpu-903 probably measured latency on corrupted outputs.)
+  - GPU 2 of fs-mbz-gpu-198 thermal-throttles to half speed (83 C, reason 0x20, 356 vs ~665 TFLOP/s) since
+    ~16:55 2026-10-26; every TP=4 run on GPUs 0-3 after that was ~2x slower (co_r2 twice). Later runs use 4-7.
+- DeltaServe bug found and fixed (dserve-vllm deltaserve/ft_save_op.py, accumulate.py, v1/worker/gpu_worker.py):
+  the graph-capturable save op gathered max_saved (16384) rows on each of its 448 calls per mixed step, ~150 ms
+  of GPU time per FT-carrying step on Qwen3-32B TP=4 regardless of FT size; the estimator learned "any FT step
+  >= 180 ms" and FT never rode an inference step (pre-fix co r1: FT ~10 % of standalone during traffic). Now a
+  capture gathers graph_ft_max_tokens rows and the uncaptured path the step's own count (tests/test_ft_save_op.py
+  42/42). Pre-fix co cells are in prefix/.
+- Actual (rsi_mix_report.py; standalone DeltaServe FT 3.4K tok/s from seq; co = post-fix, ttft 0.5 / max_tbt 0.2
+  / phase both; tt = time-sliced):
+  | rps | sys | request p50/p90/p99 s | agent task p50/p90 s | round wait mean s | all rounds done s | max-TBT p99 ms |
+  | 1 | seq | 2.6 / 4.1 / 70.9 | 80 / 221 | 70 | 640 | 170 |
+  | 1 | co  | 3.1 / 7.3 / 11.9 | 55 / 217 | 302 | 902 | 1081 |
+  | 1 | tt  | 2.9 / 11.9 / 23.5 | 60 / 258 | 112 | 683 | 1191 |
+  | 2 | seq | 2.8 / 4.6 / 73.6 | 57 / 252 | 72 | 642 | 200 |
+  | 2 | tt  | 3.4 / 16.8 / 29.9 | 73 / 267 | 121 | 689 | 1191 |
+  | 2 | co  | 4.9 / 9.3 / 13.9 | 55 / 242 | 191 | 781 | 1177 |
+  (2 rps co on healthy GPUs 4-7; the two runs on GPUs 0-3 were slowed by the throttled GPU 2 and are in confounded/.)
+  Accuracy equal across systems (formula ~70 %, finer ~27 %: the base model serves all traffic).
+  Criteria at 1 rps: (1) FT share 29 % < 40 % FAIL; (2) round wait 302 s > 150 s FAIL; (3) p90 7.3 > seq 4.1 FAIL,
+  agent-task p90 217 < 221 PASS (barely); (4) co round wait 302 > tt 112 FAIL. Not falsified (share > 25 %), but
+  co-serving loses on keeping up with the RSI loop.
+- Decision: the user asked to fix the training scheduler. Diagnosis on diag2 (1 rps, post-fix trace): forward is
+  no longer the limit (84 mixed steps carried 178K FT tokens in 14 s); backward pending (admission closed) 80 of
+  240 s with cycles of 6.7 s vs ~3.8 s alone (paused on every prefill); ~146 s admission open but nothing fit
+  (finer samples' mixed step ~170 ms vs the 0.7 x 0.2 = 140 ms decode-only budget). Next run: rsi-mix-sched.
+
+### rsi-mix-sched — DeltaServe co-serving with the scheduler fixes   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7, job 2721371)
+- Changes (all config-gated, defaults = previous behaviour):
+  - finetune.pause_min_prefill_tokens (new): pause the backward child only for steps with >= N inference prefill
+    tokens. Run: 4096 (no single step of this traffic reaches it; prefills are time-sliced against the child).
+  - slo.ft_decode_stall_budget / ft_stall_window_s (new): average-TBT gate, the share of wall time in a window that
+    FT may add (predicted) to steps carrying decodes. Run: 0.3 over 2 s. tests/test_ft_stall_gate.py 4/4.
+  - slo.decode_only_ft_safety_margin 0.7 -> 1.0 (the ft_mixed regime is fitted by the profiling pass).
+- Command: `ROUNDS=work/runs/rsimix/rounds WORKLOAD=work/runs/rsimix/workload_r$r.json TTFT_SLO=0.5 MAX_TBT_SLO=0.2
+  PHASE=both DECODE_MARGIN=1.0 PAUSE_MIN_PREFILL=4096 STALL_BUDGET=0.3 STEP_TRACE=1 scripts/rsi_mix_v2.sh co 4,5,6,7
+  8100 work/runs/rsimix/cofix_r$r` (r1 then r2, work/rsimix11.sh). Same traffic, rounds and data as rsi-mix.
+- Predicted (1 rps): backward cycles ~4 s; FT share during traffic 55-70 %; round wait 100-150 s (keeps up);
+  request p90 6-9 s (more stall than co, bounded by the gate); max-TBT p99 ~1 s (backward time-slicing, unchanged).
+  2 rps: no starvation (backward completes during traffic); round wait 150-250 s.
+- Criteria: (1) 1 rps round wait <= 150 s; (2) FT share >= 50 %; (3) request p99 < tt's (23.5 s) and agent-task
+  p50 <= tt's; (4) 2 rps trains during traffic (share > 20 %).
+- FALSIFIED if 1 rps FT share < 40 % or round wait > 200 s (then the binding limit is the closed admission during
+  backward, i.e. the single activation buffer, not pausing or the decode budget).
+- Actual (cofix_r1 / cofix_r2 vs co_r1 / co_r2, same GPUs 4-7 class, rsi_mix_report.py):
+  | rps | sys | request p50/p90/p99 s | TTFT p99 ms | agent task p50/p90 s | round wait mean s | all done s | FT share |
+  | 1 | co    | 3.1 / 7.3 / 11.9 | 605  | 55 / 217 | 302 | 902 | 0.29 |
+  | 1 | cofix | 5.1 / 10.1 / 14.8 | 1959 | 83 / 239 | 176 | 769 | 0.41 |
+  | 2 | co    | 4.9 / 9.3 / 13.9 | 967  | 55 / 242 | 191 | 781 | 0.40 |
+  | 2 | cofix | 6.3 / 12.0 / 19.6 | 2446 | 67 / 266 | 166 | 758 | 0.43 |
+  (tt: 1 rps 2.9 / 11.9 / 23.5, round wait 112; 2 rps 3.4 / 16.8 / 29.9, round wait 121.)
+  Criteria: (1) 176 > 150 FAIL; (2) 0.41 < 0.50 FAIL; (3) p99 14.8 < 23.5 PASS, agent p50 83 > tt 60 FAIL;
+  (4) 2 rps trains during traffic PASS (it already did on healthy GPUs). Not falsified (share > 0.40, wait < 200).
+  Trace (cofix_r1): backward pending 444 of 632 s; cycles 7.7 s (3.5 s alone) — the child time-slices ~50/50 with
+  the continuous decodes (decode step 8.5 -> 19 ms while it runs); forward is not a limit (895K FT tokens rode
+  357 steps in 57 s). Prefills no longer pause the child: their p99 with a backward running is 1.07 s (TTFT p99 2 s).
+- Decision: the fixes move DeltaServe along the trade-off (round wait -42 % at 1 rps, -13 % at 2 rps; request
+  p50/p90 +30-60 %), not past torchtune. The remaining training gap is the backward's GPU efficiency: alone it
+  does 4.3K tok/s (+ forward = 3.4K) vs torchtune's 5.4K fwd+bwd with recompute (~25 % MFU on 32B TP=4). Next:
+  profile the backward cycle (graph coverage, per-layer pause boundaries, NCCL residual reduces), and sweep
+  pause_min_prefill / stall budget for the latency side.
+
+### rsi-mix-loose — the scheduler fixes with a looser SLO   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7, queued behind carbon3)
+- Why: the user asked to relax the SLO. cofix (ttft 0.5, max_tbt 0.2, stall 0.3) cut the round wait 42 % at 1 rps but
+  the binding limit is now the backward's time-sliced GPU share, so a looser SLO mostly buys FT admission that is
+  already not the bottleneck. Expect a small gain in training and the latency results judged against a looser bar.
+- Changes vs cofix: ttft_slo 1.0 (DeltaServe default), max_tbt_slo 0.3, ft_decode_stall_budget 0.5.
+- Command: work/rsimix12.sh (waits for GPUs 4-7 to be idle 2 min, then coloose_r1, coloose_r2 via rsi_mix_v2.sh).
+- Caveat: cofix_r2 (13:13-13:30) overlapped another session's carbon2 run on GPUs 0-3 (same node, CPU/PCIe shared).
+- Predicted: round wait 1 rps 150-170 s, 2 rps 150-160 s; request p50 +10-20 % vs cofix; TTFT p99 ~2 s (unchanged:
+  prefill time-slicing, not admission). FALSIFIED if round wait drops below 130 s at 1 rps (then admission still
+  limited training, i.e. my bottleneck read is wrong).
+- Actual: (pending)
+- Actual (coloose_r1, 1 rps): round wait 130 / 134 / 134 / 137 s (mean 134; cofix 176, tt 112); request
+  2.6 -> 4.2 / 10.2 / 15.7 s p50/p90/p99; TTFT p99 1.09 s (cofix 1.96); agent task p50 89 s. Better than predicted
+  (150-170 s), just above the 130 s falsification line: admission was still part of the limit. 2 rps: round wait
+  131 s (tt 121), request 4.9 / 12.6 / 19.5 s, agent task p50 68 s.
+
+### rsi-mix-fast — a 3.2x faster backward (TF32 + fused SDPA attention) under the loose-SLO scheduler   (2026-10-28, GPUs 4-7)
+- Audit: the user's goal is to beat vLLM + torchtune outright. DeltaServe's backward was the gap: alone 4.3K tok/s
+  vs torchtune 5.4K. Profile (eval-tp/profile_backward.py, one TP=4 rank shard, 15.6K tokens, real
+  Qwen3BackwardService on random weights): 78 % of the cycle in fp32 GEMMs on CUDA cores — the backward child is a
+  fresh spawned process, so its fp32 LM head (~1.4 s/cycle) and per-sample fp32 attention never used tensor cores.
+- Changes (config-gated, default off = bit-identical; default-path gates re-pass: qwen3 18/18, llama3 12/12,
+  long-context 26/26, qwen3 graph 475/475):
+  - finetune.backward_tf32: TF32 for the child's fp32 matmuls.
+  - finetune.backward_attn_sdpa: attention backward through torch SDPA (cuDNN flash kernel, bf16 in, fp32 acc)
+    instead of the materialized fp32 [Hq, L, L] scores (tests/test_attn_sdpa.py 18/18, rel-L2 2.5e-3 vs fp32).
+- Microbenchmark per 64-layer cycle (one rank): fp32 4.66 s -> TF32 2.56 s -> TF32+SDPA 1.45 s (per layer 50 ->
+  36 -> 19 ms; fixed 1429 -> 238 ms). Precision vs strict fp32 (eval-tp/tf32_check.py): loss rel 7e-7, LoRA grads
+  rel-L2 0.9-1.2 %, cosine >= 0.99993 — the bf16 bulk matmuls' own error.
+- Command: work/rsimix13.sh after coloose: cofast_r1, cofast_r2 (coloose knobs + BWD_TF32=1 BWD_SDPA=1,
+  rsi_mix_v3.sh), then seqfast_r1 (seq with the fast backward: standalone speed + loss-curve sanity vs seq_r1).
+- Predicted: backward cycle under traffic 7.7 s -> ~3.5 s; 1 rps round wait ~80-100 s (< tt 112), FT share
+  ~0.8-1.0 of the OLD standalone; request latency similar to coloose (backward occupies the GPU half as long,
+  so maybe better); seqfast round ~45 s (standalone ~5.5-6.5K tok/s, > torchtune 5.4K); seqfast loss curve
+  within noise of seq_r1. FALSIFIED if cofast_r1 round wait > 112 s (tt) or seqfast loss diverges from seq_r1.
+- Actual (rsi_mix_report.py; results/rsi_mix_2026-10-28 in RSI-system):
+  | rps | sys | request p50/p90/p99 s | TTFT p50/p99 ms | max-TBT p50/p99 ms | agent task p50/p90 s | round wait s | all done s |
+  | 1 | cofast | 2.70 / 8.2 / 13.3 | 50 / 819 | 28 / 1079 | 61 / 181 | 74 (78, 71, 73, 76) | 646 |
+  | 1 | tt     | 2.87 / 11.9 / 23.5 | 56 / 1618 | 72 / 1191 | 60 / 258 | 112 | 683 |
+  | 1 | seq    | 2.57 / 4.1 / 70.9 | 50 / 428 | 27 / 170 | 80 / 221 | 70 | 640 |
+  | 2 | cofast | 2.87 / 9.0 / 17.5 | 52 / 1114 | 80 / 1517 | 43 / 210 | 70.5 | 639 |
+  | 2 | tt     | 3.40 / 16.8 / 29.9 | 89 / 1906 | 88 / 1191 | 73 / 267 | 121 | 689 |
+  | 2 | coloose| 4.9 / 12.6 / 19.5 | 100 / 1354 | 202 / 1262 | 68 / 252 | 131 | 699 |
+  seqfast_r1: rounds trained in 41 / 39 / 40 / 39 s -> standalone 5791 tok/s (seq_r1 3397; torchtune 5426); loss
+  per cycle identical for the first 3 cycles, mean 0.2709 vs 0.2710. Backward cycle under 1 rps traffic 3.8 s
+  (cofix 7.7 s). Accuracy equal to tt/seq.
+  Prediction check: round wait 74 s at 1 rps (predicted 80-100, PASS), standalone 5.8K (predicted 5.5-6.5K, PASS),
+  loss within noise (PASS); latency better than coloose (predicted similar). Not falsified.
+- Decision: DeltaServe (scheduler fixes + loose SLO + fast backward) beats vLLM + torchtune on round wait (-34 %
+  at 1 rps, -42 % at 2 rps), request p50/p90/p99, TTFT p50/p99 and agent-task p90; ties agent-task p50 at 1 rps
+  (61 vs 60 s) and wins it at 2 rps (43 vs 73 s); loses only max-TBT p99 at 2 rps (1.5 vs 1.2 s: decodes
+  time-sliced with the backward). Next if needed: the worst-token-gap tail (pause the backward for a decode step
+  that has waited > X ms), and the remaining ~12 ms/layer of elementwise backward ops (fusion).

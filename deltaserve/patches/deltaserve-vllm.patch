@@ -19,10 +19,10 @@ index 25ab5f7..1ebd3b7 100644
  python tests/test_qwen3_tp_shard.py                     # Qwen3 M2 gate (42 cases)
 diff --git a/EXPERIMENTS.md b/EXPERIMENTS.md
 new file mode 100644
-index 0000000..287d5eb
+index 0000000..8790c38
 --- /dev/null
 +++ b/EXPERIMENTS.md
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,811 @@
 +# Experiment log
 +
 +### lc16k-a — Qwen3-32B TP4 16K-context FT bring-up (pure FT)   (2026-10-12, H200 node, GPUs 0-3 ×4)
@@ -274,6 +274,566 @@ index 0000000..287d5eb
 +  - D: **74.5 %** vs base 66.5 % on the same eval engine (+24/−8, p = 0.007).
 +  - Audit: the co-serving tail varies run to run (p99 725 → 217 ms). The base moves ~1.5 points between evals at temp 0.
 +- **Decision:** publish `RSI-system/deltaserve/` with both runs in results/RESULTS.md.
++
++### paper-1 — paper metrics on the RSI loop: LoRA vs skills-in-context (accuracy, context, KV, TTFT/TBT, GPU util, leakage, general ability)   (2026-10-19, fs-mbz-gpu-198 ×8, job 2721371)
++- **Reflection / audit:**
++  - Done so far: rsi-e2e-1/2 showed the loop works. Self-generated traces → LoRA trained in the gaps → formula
++    68 → 75 / 66.5 → 74.5 (p < 0.01). Co-serving SLO was 96.6 / 99.1 %.
++  - Missing for the paper (the user's list):
++    1. Is LoRA + skills > skills?
++    2. How much context, KV cache and TTFT/TBT do skills cost versus a LoRA?
++    3. Does co-serving raise GPU utilization?
++    4. Can skills / user data leak out of the prompt, and does the LoRA remove that?
++    5. Does distilled experience (or a pile of skills in context) hurt general ability?
++  - None of these was measured. The earlier runs evaluated only {base, LoRA} with an EMPTY playbook. They had no
++    TBT, no KV numbers and no GPU utilization.
++  - Why now: same loop, same code, plus instruments. One run on one node gives every number from one adapter.
++- **Goal / criteria (what each number answers):**
++  - H1, "LoRA+skills > skills": formula test, 2×2 {base, rsi} × {empty, skills = the ACE best playbook}. Paired sign
++    test rsi_skills vs base_skills.
++  - H2, context / KV / latency (stock vLLM 0.31, TP=4, GPUs 0-3, the same formula test traffic at 1 and 4 rps):
++    - skills = base + playbook in the prompt; lora = adapter + "(empty)".
++    - Per request: prompt tokens, TTFT, TBT (inter-chunk gaps), E2E.
++    - Per second: vLLM KV-cache usage, running/waiting, prefix-cache hits.
++    - Also the KV pool size → max concurrency.
++  - H3, GPU utilization: DCGM SM_ACTIVE (1002) at 1 Hz on GPUs 0-3, DeltaServe phase A (inference only) vs phase C
++    (co-serving), same traffic.
++  - H4, leakage: 12 prompt-extraction attacks in the deployment's own prompt. Measure the fraction of the playbook's
++    282 bullets leaked by id, and verbatim (LCS ≥ min(60 chars, 50 %)). Compare skills deployment vs LoRA deployment
++    vs base (control).
++  - H5, general ability: on {base, rsi} × {empty, skills}, score:
++    - FiNER test: the other finance task; the LoRA never saw it, and the formula playbook is "irrelevant skills" there.
++    - GSM8K test (1319).
++    - MMLU (1000 of all/test, seed 0).
++- **Command:** `srun --jobid 2721371 --overlap bash deltaserve/scripts/paper_run.sh paper1` (RSI-system).
++  - It runs `run_e2e.sh` with SKIP_EVAL=1 on GPUs 0-3. The DeltaServe config is unchanged from rsi-e2e-2
++    (configs/coserve_e2e.yaml: LoRA q,k,v,o r16 α32, lr 1e-4 const, 2 epochs, 16K tok/step, ace loss spans,
++    0.5 rps traffic).
++  - `eval_suite.sh`: base on GPUs 4,5 during the e2e; rsi on 6,7 afterwards. Uses stock vLLM 0.31, TP=1, temp 0,
++    prefix cache on.
++  - `serving_cost.sh` on GPUs 0-3 after the e2e. RATES = "1 4".
++  - `gpu_monitor.sh` (dcgmi dmon -e 155,203,252,1002,1003,1004) runs throughout.
++- **Data:**
++  - Formula train 500 (traffic B → SFT rows), formula test 200, FiNER test.
++  - GSM8K test 1319, MMLU 1000.
++  - Playbook = ACE formula offline+GT best_playbook.txt (282 bullets, ~29.7K tokens).
++  - Leak check: the adapter is trained only on formula TRAIN traces; every accuracy number is on test splits / other
++    benchmarks.
++- **Predicted (committed before the run):**
++  - H1:
++    - base_empty ≈ 67, rsi_empty ≈ 74-75.
++    - base_skills ≈ 74-78; rsi_skills ≥ base_skills by +1-3. That gap is inside noise for n=200, so H1 likely
++      needs p < 0.05 to be claimed.
++    - FAIL if rsi_skills < base_skills − 3.
++  - H2:
++    - Prompt tokens ≈ 30.1K vs ≈ 0.4K (~75×).
++    - With a warm prefix cache: skills TTFT p50 ≈ 2-4× lora's; TBT 1.2-2× (attention over 30K context per decode
++      token).
++    - KV-usage peak higher by ≥ 12 % of the pool. That is ≈ 30K of 1.0M tokens at TP=4, shared through the prefix
++      cache. Without a shared prefix it would be 30K tokens per request.
++    - FAIL (for the paper claim) if skills TBT ≤ 1.1× lora.
++  - H3: phase C SM_ACTIVE ≥ 2× phase A (A ≈ 0.1-0.25 at 0.5 rps). FAIL if < 1.3×.
++  - H4:
++    - Skills: ids ≈ 100 %, verbatim ≈ 40 % (smoke: 282/282, 118/282).
++    - LoRA and base: ids ≤ 2 %, verbatim ≤ 2 %.
++    - FAIL if LoRA verbatim > 10 %.
++  - H5:
++    - GSM8K / MMLU: rsi within ±2 of base.
++    - Skills in context within ±2 on GSM8K/MMLU, but −1 to −5 on FiNER.
++    - rsi on FiNER: −3 to +2.
++    - FAIL ("distillation harms") if rsi drops > 3 on GSM8K or MMLU with p < 0.05.
++- **Actual** (run dir `RSI-system/deltaserve/work/runs/paper1`, report `paper_metrics.md`):
++  - Loop: B 427/500 correct; 427 rows; C 34 cycles, 526K tokens in 281 s (1873 FT tok/s); loss 0.289 → 0.154.
++    Same as rsi-e2e-1/2.
++  - **H1 — FAIL as predicted.** Formula (n=200), base / base+skills / LoRA / LoRA+skills = 68.5 / 86.0 / 75.0 / 85.5.
++    - rsi_skills vs base_skills: −0.5 (+2/−3, p=1.0).
++    - The playbook alone is far stronger than I predicted (86 vs my 74-78).
++    - The LoRA recovers 6.5 of the playbook's 17.5 points (37 %) with zero context (p=0.029 vs base). It adds nothing
++      on top of the playbook, which is expected in hindsight: it was distilled from traces generated WITH that same
++      playbook, so it carries a subset of the same information.
++    - "LoRA + skills > skills" needs new knowledge in the LoRA (e.g. traces from user feedback that the playbook does
++      not contain), not a distillation of the playbook itself.
++  - **H3 — PASS.** DeltaServe GPUs 0-3, same 0.5-rps traffic:
++    - SM_ACTIVE 19.2 % (A) → 56.0 % (C), 2.9×; nvidia-smi util 59 → 96 %; power 274 → 493 W/GPU.
++    - TTFT p50/p99 35/51 → 81/268 ms; SLO<0.3 s 99.5 → 99.1 %; TBT p50 8.7 → 8.3 ms, p99 9.8 → 25.8 ms.
++  - **H4 — PASS.**
++    - Skills deployment: ids 282/282 (100 %), verbatim 149/282 (52.8 %).
++    - Base control: 1/282, 0/282.
++    - LoRA: 1/282 ids, 7/282 verbatim (2.5 %). All 7 are one textbook sentence (the Sharpe-ratio definition "(R_p −
++      R_f)/σ_p, where R_p is the portfolio return, R_f is the risk-free rate…") repeated in 7 bullets, elicited by
++      the attack that asks how to compute Sharpe. That is public knowledge, not playbook content.
++    - The single id hit (calc-00001) also appears for the base model: a guessable id.
++  - **H5 — PASS (no harm from distillation; harm from irrelevant skills in context).**
++    - LoRA vs base: FiNER +0.1 (p=0.27), GSM8K −0.5 (p=0.28), MMLU −0.2 (p=0.77). All noise.
++    - Formula skills in context on FiNER: −4.6 (+19/−49, **p=0.0004**) for base and −5.8 for the LoRA. On GSM8K
++      −0.7 (p=0.23), on MMLU +0.5 (n.s.).
++    - Skills in context also cost eval time: GSM8K 649 s vs 223 s, FiNER 566 s vs 181 s on one GPU.
++  - H2: see paper-1b. The 4-rps pass here repeated prompts and is invalid; the LoRA rows are unmerged kernels.
++  - Audit:
++    - Every accuracy is on test splits or other benchmarks. The adapter was trained only on formula-train traces.
++    - Temp 0, one run each.
++    - Sign tests are paired on identical items.
++    - The FiNER drop with skills is the strongest "skills harm" evidence; GSM8K/MMLU are not affected.
++
++### paper-1b — serving-cost follow-up: fresh prompts at 4 rps, merged LoRA, no prefix sharing   (2026-10-20, fs-mbz-gpu-198 GPUs 0-3, job 2721371)
++- **Why (audit of paper-1 §2):**
++  - (a) The 4-rps pass repeated the 200 test prompts already sent at 1 rps. Prefix-cache hit was 98 % vs 54 %, so whole
++    prompts hit the cache and the 4-rps TTFT is not valid.
++  - (b) The "LoRA" rows run stock vLLM's unmerged multi-LoRA kernels: +67 ms TTFT and +2.6 ms TBT vs base at 1 rps.
++    That cost belongs to the serving stack, not to the idea; a single customized model is served merged.
++  - (c) With one shared playbook and prefix caching, the skills' KV is shared. Per-user skills are not shared, and that
++    case was never measured.
++- **Command:** `srun --jobid 2721371 --overlap bash deltaserve/scripts/paper_run_cost2.sh paper1`. The steps:
++  1. `merge_lora.py`: W += (32/16)·B·A on q,k,v,o → `runs/paper1/merged`.
++  2. `cost_fresh`: P / L / M servers, every condition at 4 rps on the formula TRAIN split (500 new prompts).
++  3. `cost`: adds merged / merged_skills at 1 rps on the test split, next to paper-1's 1-rps rows.
++  4. `cost_nopc`: base and skills, prefix caching OFF, 1 rps.
++- **Predicted:**
++  - Merged is within ±10 % of base on TTFT and TBT, and its formula accuracy on the traffic is within ±3 of lora@1's
++    73.5 (sanity check of the merge).
++  - Fresh 4 rps: skills TTFT p50 ≥ 2× merged.
++  - No-prefix-cache skills: TTFT p50 ≥ 1 s (a 30K-token prefill per request); peak KV usage ≥ 5× its prefix-cached run.
++  - FAIL / merge bug if merged accuracy is < 70 on the 200 test items.
++- **Actual — all PASS** (`runs/paper1/paper_metrics.md` §2, three tables):
++  - **Merge sanity:**
++    - merged@1 test 74.5 % (lora@1 73.5, the eval 75.0).
++    - On the same 500 train prompts, merged 76.2 vs lora 75.8. The train-split numbers are in-sample for the
++      adapter and are used for latency only.
++  - **Merged = base latency:**
++    - 1 rps: TTFT p50/p99 41/66 vs base 43/62 ms; TBT p50 6.7 vs 7.0 ms.
++    - Fresh 4 rps: 42/85 vs 42/68 ms; TBT 6.9 vs 6.8 ms.
++    - Unmerged vLLM multi-LoRA costs +67 ms TTFT and +2.6 ms TBT. That is a serving-stack cost the merged model
++      does not pay.
++  - **Fresh 4 rps, shared prefix cached:**
++    - Skills vs merged: TTFT p50 119 vs 42 ms (2.8×), p99 861 vs 85 ms (10×).
++    - TBT p50 13.4 vs 6.9 ms (1.9×), p99 46.8 vs 24.7 ms.
++    - E2E p50 4.06 vs 1.77 s.
++    - KV usage mean 2.2 vs 0.1 %; running peak 33 vs 15.
++    - Prompt tokens 30,137 vs 391 (77×).
++  - **Prefix cache OFF (per-user skills), 1 rps:**
++    - Skills: TTFT p50 **34.0 s**, p99 99 s; TBT p50 318 ms; KV usage mean 76 %, peak 99.6 %; 59 running (KV-bound:
++      1.78M-token pool / 30.5K tokens = 58), 63 waiting.
++    - Base: 38 ms / 6.7 ms. The server cannot sustain 1 rps with per-request 30K-token skills (7.36 GiB KV each).
++  - Skills + LoRA (merged_skills@4) is the slowest cached condition: the outputs are longer (441 vs 337 tokens).
++- **Decision:**
++  - The paper's cost claim should compare skills against the MERGED customized model.
++  - Report both the shared-cache (best case for skills) and the no-sharing (per-user skills) settings.
++  - Never report the paper-1 4-rps rows (repeated prompts).
++
++### agent-1 — sequential (inference, then training) vs co-serving, TraceLab coding-agent workload   (2026-10-20, fs-mbz-gpu-198 ×8 H200)
++- **Reflection / audit:**
++  - Done so far: paper-1/1b measured LoRA vs skills (accuracy, context/KV, TTFT/TBT, GPU utilization, leakage).
++  - The co-serving phase C so far used one simple Poisson ACE workload (0.5 rps, short prompts). It said nothing
++    about agentic traffic, or about what the alternative costs in wall-clock time.
++  - The user asks for the comparison against running the two jobs disaggregated in time (serve, then train), with
++    requests following TraceLab (arXiv:2606.30560), and for task completion time.
++  - Why TraceLab: its traffic is long-context, short-output, with heavy-tailed tool latencies and human-paced gaps
++    (human think time is 92 % of session wall-clock). Those gaps are exactly where co-serving trains.
++  - Honest risks:
++    1. The co-serving server's KV pool is 562K tokens vs 1.78M for a plain deployment (the FT buffers take the
++       memory). Agent contexts are long, so prefix-cache evictions can make co-serving's agent latency worse. This
++       is a real cost and will be reported.
++    2. The FT job is small (sft_from_traces, 427 rows, 263K tokens/epoch).
++- **Goal/criteria:**
++  - Agent task = one user request plus its tool loop. Report its completion time (p50/p90/p99), and per-round
++    TTFT/TBT.
++  - Report the FT job's completion time (/start_finetuning → final/ adapter).
++  - Report the makespan of both jobs:
++    - Sequential = inf makespan + ft time.
++    - FT-first variant: every task delayed by the ft time.
++    - Co = max(replay end, ft end).
++  - PASS (the co-serving claim holds) if:
++    - co makespan ≤ 0.8 × sequential makespan, AND
++    - co agent-task p50 completion is within +10 % of inference-only.
++- **Workload** (`deltaserve/scripts/agent_trace.py`, TraceLab v0.0.1 DuckDB, Claude rounds, seed 0):
++  - 48 sessions from a pool of 2,510, Poisson arrivals at 0.05/s (last at 995 s).
++  - 900 rounds, 83 tasks; each session cut at its first 4 tasks / 80 rounds.
++  - Real appends ×1/8 (p50/p90 141/918), real outputs (p50/p90 184/1115).
++  - Real tool gaps (p50 0.09 s, p99 182 s) and human gaps (p50 129 s), each capped at 300 s.
++  - Context: shared 2K system block plus the session history, with output re-sent as input. Compaction to
++    system + 4K when the context reaches 36,864.
++  - Replay (`agent_replay.py`) is closed-loop per session, uses synthetic token ids, and forces output length.
++- **FT job:** `runs/paper1/sft_from_traces.jsonl` (427 correct ACE trajectories), 4 epochs ≈ 1.05M tokens. Same
++  recipe as train_only.yaml: q,k,v,o r16, lr 1e-4, 16K batch tokens.
++- **Commands** (all three on node 198, Qwen3-32B YaRN x4, TP=4, DeltaServe fork):
++  - `WORKLOAD=work/agent/agent_workload.json DATA=.../sft_from_traces.jsonl EPOCHS=4 agent_run.sh co 0,1,2,3 8000 work/runs/agent1/co`
++  - `... agent_run.sh inf 4,5,6,7 8100 work/runs/agent1/inf`
++    - Finetuning off, gpu_memory_utilization 0.90. Runs concurrently with co on the other 4 GPUs; host-side
++      interference is possible.
++  - Then `... agent_run.sh ft 4,5,6,7 8100 work/runs/agent1/ft`.
++- **Predicted:**
++  - Inf replay makespan ≈ 40 min (≈ 33 min of trace waits plus LLM time).
++  - FT alone ≈ 9–10 min (~1.9K tok/s).
++  - Co: FT finishes within the replay window at ≈ 15–25 min (it trains in the gaps). Makespan ≈ replay ≈ 41 min vs
++    sequential ≈ 50 min (~0.82×).
++  - Co agent-task p50 completion +5–15 % vs inf (TTFT p50 ~2×, smaller KV).
++  - FALSIFIED if co FT does not finish before the replay ends, or co task p50 is > +25 %.
++- **Deviation (11:20):**
++  - The `inf` run on the DeltaServe fork with finetuning off (gpu_memory_utilization 0.90) died 50 s in. The
++    error was a CUDA illegal memory access in flash-attn (`hopper/flash_fwd_launch_template.h:199`, a 7,180-token
++    prefill); 169 of its 184 rounds errored. The log is kept in `runs/agent1/inf_fork_crashed/`.
++  - It was killed. The inference-only baseline is now stock vLLM 0.31 (the paper-1 serving server), run on GPUs
++    4-7 after `ft` via `agent_run2.sh` (since renamed `agent_run.sh`). It keeps the same max_model_len 40960, step budget 16384 and chunking 2048.
++  - Consequence: the inf baseline uses a different (newer) engine than co. Its latency is, if anything, better
++    than the fork's would be, which makes it conservative for the co-serving claim.
++  - Early co observation: FT-only forwards (15,936 tokens ≈ 2–3 s) are repeatedly aborted at layer 13–18 by agent
++    arrivals (tier C). In the first 4 min, FT was at 5 cycles / 80K tokens.
++- Also: the first `ft` launch died with EADDRINUSE on the backward NCCL port 29677 (held by `co`), and was rerun
++  with `DSERVE_BACKWARD_NCCL_PORT=29777`.
++- **Actual** (`RSI-system/deltaserve/results/agent1_2026-10-20/agent_metrics.md`; RESULTS.md §4) — **FAIL** on both
++  criteria:
++  - **Makespan:** co 2,161 s vs sequential 2,386 s = **0.906×** (criterion ≤ 0.8×). The inf replay took 2,130 s
++    (predicted ~40 min, actual 35.5).
++  - **FT job:**
++    - Alone: **255 s** at 4,122 tok/s (predicted 9–10 min).
++    - Co-served: 1,612 s at 653 tok/s (16 % of alone). It finished 9 min before the replay ended, as predicted.
++    - Loss is identical, 0.523 → 0.053.
++  - **Agent task completion** (user message → last LLM round of its tool loop):
++    - p50 / p90 / p99: inf 38.9 / 272 / 905 s, co 46.6 / 306 / 936 s.
++    - **+20 % at p50** (criterion ≤ +10 %; not past the +25 % falsification line).
++    - LLM time per task: +19 %.
++  - **Per-round latency:** TTFT p50 152 → 179 ms; TBT 8 → 10 ms.
++  - **Utilization:** SM_ACTIVE 33.4 / 36.4 %. 35 % of the inf wall time had no request in flight.
++  - **Aborts:** 43 tier-C aborts of FT-only forwards (≈0.36M token-equivalents discarded). FT stalled 11:28–11:37
++    at peak load.
++  - Train-then-serve variant: FT done at 255 s, task p90 272 → 354 s.
++- **Decision / insight:**
++  - Co-serving wins makespan by at most the FT job's standalone time. Here that job is small (4 min) next to 36 min
++    of agent traffic, so the win is 9 %.
++  - The real gap: on agent traffic the GPU is idle about two-thirds of the time, yet DeltaServe trains at only 16 %
++    of its standalone rate. The idle time is fragmented: tool gaps are p50 0.09 s, and a 16K FT forward is
++    all-or-nothing and gets aborted.
++  - Next, if pursued:
++    1. Gap-sized FT forwards: cap FT tokens per FT-only step from the observed inter-arrival gap.
++    2. Keep the partial forward on abort instead of discarding it.
++    3. A larger FT job (e.g. 10×), so the makespan effect is measurable.
++  - Separately: the DeltaServe fork with finetuning off crashes in flash-attn on this workload — open bug.
++
++### rsi-poisson — RSI traffic with Poisson arrivals: sequential (stop serving to train) vs co-serving   (2026-10-20, fs-mbz-gpu-198 ×8 H200)
++- **Reflection / audit:**
++  - agent-1 replayed TraceLab sessions. The user clarified that the intent was different: take the RSI workload
++    and borrow only TraceLab's way of sending requests, a Poisson arrival process.
++  - The sequential baseline there was also unrealistic: it served first and then trained, with no traffic during
++    training. Under continuous traffic, a single deployment that stops to train makes the requests arriving during
++    training wait. That is the cost co-serving removes.
++  - So the comparison now runs on one server config with identical engines (DeltaServe, FT enabled), and the only
++    difference is whether serving stops for the FT job.
++- **Goal/criteria:**
++  - Per rate, report request completion time (arrival → done, including any hold) at p50/p90/p99, the FT job time,
++    and when everything is done.
++  - PASS (the co-serving claim holds) if, at every rate:
++    - co p90 request completion < seq p90, AND
++    - co FT done ≤ 3× the sequential FT time.
++- **Setup:**
++  - Traffic: ACE formula train split (500 items, empty playbook) to the base model. Poisson at RATE ∈ {0.5, 1, 2}
++    rps, one pass. Temp 0, thinking off, max 4096 tokens.
++  - FT job: `runs/paper1/sft_from_traces.jsonl` (427 correct trajectories from the RSI loop) × 2 epochs = 526K
++    tokens (the RSI recipe). It starts at t = 120 s.
++  - seq: hold new arrivals, drain in-flight requests, POST /start_finetuning, wait for final/, release.
++  - co: POST /start_finetuning and keep serving.
++  - Server: train_only.yaml with profile_on_launch true, Qwen3-32B YaRN x4, TP=4, KV 562K.
++- **Commands:**
++  - `RATE=r DATA=... EPOCHS=2 rsi_poisson.sh co 0,1,2,3 8000 work/runs/rsip/co_r<r>` (NCCL 29677)
++  - `rsi_poisson.sh seq 4,5,6,7 8100 work/runs/rsip/seq_r<r>` (NCCL 29777)
++  - The pairs run in parallel on disjoint GPUs, one rate after another.
++- **Predicted:**
++  - FT alone ≈ 130 s (agent-1 measured 4.1K tok/s alone).
++  - seq: the ~65 / 130 / 260 requests arriving during the FT window (0.5 / 1 / 2 rps) are held for ~65 s on
++    average. That shows up at p90 for 1–2 rps and at p99 for 0.5 rps: p90 > 30 s at 1 and 2 rps.
++  - co: FT ≈ 280 s at 0.5 rps (paper-1: 281 s). Longer at 2 rps (~400–700 s), and it could stall the way agent-1
++    did. Request p50 is +20 % (paper-1: e2e p50 1.72 → 2.06 s) and p90 stays < 10 s.
++  - Everything done at ≈ the traffic length (1000 / 500 / 250 s + tail) in both modes. At 2 rps, seq ends later,
++    because the held burst is served after FT.
++  - FALSIFIED if co p90 ≥ seq p90 at any rate, or co FT does not finish before the traffic ends at 0.5 rps.
++- **Deviation (12:36):**
++  - The first attempt (`runs/rsip_invalid_ftstart/`) is invalid: FT trained from server launch in both modes, long
++    before t = 120 s.
++  - Cause, a bug: under TP the worker-side coordinator keeps the default `ft_started=True`. Only the scheduler's
++    coordinator reads `start_on_launch`. The runner relays the worker's flag (`finetune_ft_started`), and the
++    scheduler then opens admission, so `start_on_launch: false` is ignored at TP > 1.
++  - Fixed in `v1/worker/gpu_worker.py`: the worker coordinator now takes `start_on_launch` too.
++  - Earlier runs affected:
++    - paper-1: no corpus at launch, so no effect.
++    - agent-1 co: FT began ~5 s before its POST, which is negligible.
++  - Relaunched.
++- **Actual** (`RSI-system/deltaserve/results/rsi_poisson_2026-10-20/`; RESULTS.md §5). Request completion
++  p50/p90/p99 in s, with the FT time:
++
++  | rate | seq | co |
++  |---|---|---|
++  | 0.5 | 1.64 / 6.35 / 119.8, FT 126 s | 1.67 / 2.95 / 6.4, FT 306 s |
++  | 1 | 1.92 / 86.0 / 127.3, FT 126 s | 1.82 / 3.54 / 6.2, FT 436 s |
++  | 2 | 6.46 / 107.6 / 131.2, FT 126 s | 1.71 / 2.63 / 5.5, FT 267 s |
++
++  - Under seq, 51 / 135 / 249 requests were held for ~65–71 s each.
++  - Criterion 1 (co p90 < seq p90 at every rate): **PASS**.
++  - Criterion 2 (co FT ≤ 3× seq): **FAIL at 1 rps** (3.5×). It held at 0.5 rps (2.4×) and 2 rps (2.1×).
++  - Predictions:
++    - FT alone ≈ 130 s: actual 126. ✔
++    - seq p90 > 30 s at 1–2 rps: actual 86 / 108. ✔
++    - co FT ≈ 280 s at 0.5 rps: actual 306. ✔
++    - co p50 +20 %: actual +2 % at 0.5 rps and −6 % / −74 % at 1 / 2 rps (seq's p50 includes holds). ✘ — better
++      than predicted.
++    - co FT ~400–700 s at 2 rps: actual 267 s, but **0 tokens trained while serving**. The whole job ran after
++      the traffic ended, so the prediction was right for the wrong reason.
++  - FT rate while serving: 41 / 23 / 0 % of standalone (4.18K tok/s).
++- **Decision / insight:**
++  - For RSI the right comparison is service availability vs adapter freshness.
++    - Co-serving keeps request p99 ≤ 6.4 s at every rate, where stopping to train costs a 65–71 s wait for 10–50 %
++      of the requests.
++    - The cost is an adapter that is ready 140–309 s later.
++  - DeltaServe's FT share collapses with load (0 % at 2 rps on 4×H200 with ACE prompts). This is the same
++    fragmented-gap problem as agent-1.
++  - The next lever is still FT steps sized to the gaps, plus revisiting the 0.1 s-window RPS throttle.
++
++### rsi-tracelab — RSI traffic with TraceLab session timing: stop serving to train vs co-serving   (2026-10-22, fs-mbz-gpu-198 ×8: co on 0-3, seq on 4-7)
++- Reflection/audit: rsi-poisson (2026-10-20) sent each ACE request as an independent Poisson arrival. The user asked
++  for request arrivals that follow TraceLab. Checked TraceLab: the corpus records no session arrival process
++  (csv_export: "session arrival times are synthetic"); what it does record is per-session timing. The real
++  per-user inter-request gaps are p50 7.4 s, p90 58 s; an active user sends ~0.03 req/s; the aggregate gap CV is 28
++  (Poisson = 1). So: sessions arrive Poisson (as TraceLab's simulator does), and inside a session every round waits its
++  real TraceLab gap (tool latency / human think time, capped at 300 s), then sends the next ACE request and waits for
++  its answer. Mean request rate matched to rsi-poisson (0.5 / 1 / 2 rps) by the session rate, so the only change vs
++  rsi-poisson is the arrival shape. The FT admission scheduler is unchanged (the user: fix "too conservative" later),
++  so this run measures the workload, not a scheduler fix.
++- Goal/criteria (same as rsi-poisson): co request-completion p90 < seq p90 at every rate; co FT time ≤ 3× seq FT time.
++  Also report per-task completion (a user round + its tool loop), since a held request now stalls its whole session.
++- Workload: `agent_trace.py --db syfi_coding_trace.duckdb --sessions 60 --rate {0.0308,0.0686,0.147} --seed 0`
++  (scale/caps default) -> `work/runs/rsit/workload_r{0.5,1,2}.json`. With 2 s responses this gives the first 500
++  requests at 0.47 / 0.98 / 1.88 rps; gap CV 1.86 / 0.83 / 1.04; peak 10-s rate 1.5 / 2.4 / 3.7 rps; 33 / 36 / 41 sessions.
++  ACE formula train split, 500 requests, each sent once in order across sessions.
++- Command: `work/rsit.sh` = for r in 0.5 1 2: `RATE=$r WORKLOAD=work/runs/rsit/workload_r$r.json
++  DATA=work/runs/paper1/sft_from_traces.jsonl EPOCHS=2 TRAIN_AT=120 scripts/rsi_poisson.sh {co 0,1,2,3 8000 |
++  seq 4,5,6,7 8100} work/runs/rsit/{co,seq}_r$r` (backward NCCL ports 29677 / 29777). Same server config as
++  rsi-poisson (train_only.yaml + profile_on_launch, Qwen3-32B YaRN TP=4, FT 427 trajectories × 2 = 526K tokens).
++- Predicted:
++  - seq: FT ≈ 126 s at every rate. Fewer requests held than rsi-poisson, because a held request stalls its session
++    (closed loop), but held tasks take ≥ 60 s longer.
++  - co: p90 ≈ 3–4 s at every rate. 0.5 rps is burstier (CV 1.9), so the idle gaps are longer and the FT share is a
++    bit higher than rsi-poisson's 41 % (adapter ready ≈ 350–420 s). At 1 and 2 rps the shape is near-Poisson, so
++    expect the same collapse (≈ 20 % and ≈ 0 %).
++  - Criterion 1 PASS at all rates. Criterion 2 likely FAILS at 1 rps again.
++  - FALSIFIED if co p90 > 10 s at any rate (bursts break the SLO gate), or if co FT share at 2 rps is > 20 % (the
++    bursts leave usable gaps that Poisson did not).
++- Actual (2026-10-22, all 6 cells, 500/500 answered, 0 errors; accuracy 343–348/500 everywhere):
++
++  | rps | mode | request p50 / p90 / p99 (s) | held (mean wait) | FT time | adapter ready | task p50 / p90 (s) |
++  |---|---|---|---|---|---|---|
++  | 0.5 | seq | 1.58 / 2.39 / 6.1 | 1 (125 s) | 125 s | 247 s | 29.8 / 231 |
++  | 0.5 | co | 1.60 / 2.54 / 5.2 | 0 | 254 s | 374 s | 29.6 / 212 |
++  | 1 | seq | 1.62 / 2.76 / 106 | 13 (77 s) | 126 s | 247 s | 36.2 / 222 |
++  | 1 | co | 1.60 / 2.56 / 5.9 | 0 | 491 s | 611 s | 25.9 / 135 |
++  | 2 | seq | 1.77 / 3.28 / 124 | 29 (77 s) | 125 s | 246 s | 74.8 / 187 |
++  | 2 | co | 1.70 / 2.69 / 5.6 | 0 | 272 s | 392 s | 25.0 / 100 |
++
++  - Co FT trained during traffic: 50 % / 7 % / 0 % of standalone speed. At 1 and 2 rps, most or all of the FT
++    ran after the traffic ended.
++  - Criterion 1 (co request p90 < seq): FAIL at 0.5 (2.54 vs 2.39 s, a tie: 1 request was held); PASS at 1 and 2.
++  - Criterion 2 (co FT ≤ 3× seq): PASS at 0.5 (2.0×) and 2 (2.2×, but only because the traffic ended); FAIL at 1
++    (3.9×).
++  - Predictions: seq held fewer than under Poisson ✓ (1 / 13 / 29 vs 51 / 135 / 249: a held request stalls its
++    session, so the backlog does not grow). Co p90 2.5–2.7 s, better than predicted. FT share at 0.5 ✓ (50 % vs
++    the predicted > 41 %). At 1 rps it was worse than predicted (7 % vs ≈ 20 %). At 2 rps ✓ (0 %). Neither
++    falsifier fired.
++  - Insight: with agent sessions, the cost of stopping to train shows up per task, not per request. Most
++    requests are untouched, but a task whose request is held stalls its whole tool loop: seq task p50 75 s vs
++    co 25 s at 2 rps, and p90 187 vs 100 s. Co-serving still does not use the gaps: the 1 rps run trained 7 %
++    while serving.
++  - Cell-to-cell variation: which ACE question lands in which session depends on response timing, so the task
++    counts differ slightly (45 / 43 / 47 vs 45 / 43 / 45).
++- Decision: report to the user. The scheduler fix (gap-sized FT steps plus the RPS throttle) is the next lever,
++  on the user's go.
++
++### rsi-tracelab-ride — the co-serving half of rsi-tracelab with DeltaServe's standard FT admission   (2026-10-22, fs-mbz-gpu-198 ×8)
++- Reflection/audit: rsi-tracelab's co-serving trained only 50 / 7 / 0 % of standalone speed while serving. The user
++  asked why DeltaServe's scheduler did not train during serving; that is its whole purpose. The audit found the
++  cause in our config, not in DeltaServe. Every RSI config since 2026-10-19 (train_only.yaml, rsi_e2e, rsi_ace)
++  inherited two settings from the 16K long-context config (qwen3_32b_tp4_16k):
++  1. `ft_tokens_admission_constrain_factor: 0`: an FT sample may never ride an inference prefill step. FT runs only
++     in fully idle steps.
++  2. The RPS throttle (0.1 s window, close at 5 rps, 1 s hold): any single arrival reads as 10 rps and closes FT.
++
++  Those settings made sense for 16K-token samples, which cannot share a step without blowing TTFT. The RSI samples
++  are 502–907 tokens (ft-store log). The validated Qwen3-14B config uses factor -1 (the SLO estimator decides) and no
++  throttle. So rsi-poisson and rsi-tracelab measured DeltaServe with its core mechanism off. This run measures it on.
++- Change vs rsi-tracelab, co only: `FT_ADMIT=ride` -> `ft_tokens_admission_constrain_factor: -1`,
++  `rps_throttle_enable: false`. Everything else is identical: workloads, ACE requests, FT data, 16K activation
++  buffer, 16K tokens per optimizer step, SLO (ttft 0.3, max_tbt 0.05), forward_interruptible, admission phase
++  "prefill". The seq baseline is reused from rsi-tracelab: there FT runs alone, so neither setting is active.
++- Command: `work/rsit2.sh`:
++  - 0.5 rps on GPUs 0-3 (port 8000, NCCL 29677) and 1 rps on GPUs 4-7 (port 8100, NCCL 29777), in parallel;
++  - then 2 rps on GPUs 0-3;
++  - each: `FT_ADMIT=ride RATE=$r WORKLOAD=work/runs/rsit/workload_r$r.json DATA=work/runs/paper1/sft_from_traces.jsonl
++    EPOCHS=2 TRAIN_AT=120 scripts/rsi_poisson.sh co <gpus> <port> work/runs/rsit2/co_r$r`.
++- Criteria:
++  - (1) co request p90 ≤ 4 s at every rate (rsi-tracelab co: 2.5–2.7 s; seq: 2.4–3.3 s).
++  - (2) co FT trained during traffic ≥ 40 % of standalone at 1 rps (was 7 %).
++  - (3) adapter ready ≤ 1.5× seq's at every rate (seq ≈ 247 s -> ≤ 370 s).
++- Predicted:
++  - FT share during traffic ≈ 80 / 50 / 30 % at 0.5 / 1 / 2 rps.
++  - Adapter ready ≈ 290 / 360 / 380 s. At 2 rps the 500 requests end at about 270 s, so its tail still trains
++    alone after the traffic.
++  - Request p90 ≈ 3 s (the estimator holds each step inside the TTFT SLO). TTFT p99 rises toward the SLO (≈ 0.3 s).
++  - FALSIFIED if FT share at 1 rps < 25 % (then the bottleneck is elsewhere: the backward child, the pause contract,
++    or tier-C aborts) or if request p90 > 5 s (riding costs the users).
++- Actual (work/runs/ridecmp = rsit seq + rsit2 co, `rsi_poisson_metrics.py`):
++  - adapter ready 378 / 617 / 391 s at 0.5 / 1 / 2 rps (rsi-tracelab co with the switches off: 374 / 611 / 392; seq
++    247 / 247 / 246). Identical to the switches-off run within noise.
++  - request p90 2.52 / 2.58 / 2.50 s (seq 2.39 / 2.76 / 3.28); TTFT p99 86 / 174 / 52 ms; max-TBT p99 ≤ 50 ms.
++  - At 1 rps FT reached ~64K tokens after ~3 min of traffic (≈ 6-10 % of standalone), 63 tier-C aborts; the
++    server log shows no FT sample on any inference step, only FT-only 16K forwards in idle gaps.
++  - accuracy 346 / 345 / 341 of 500 (unchanged).
++  - Criteria: (1) PASS, (2) FAIL (≈ 6-10 % at 1 rps), (3) FAIL at 1 rps (617 s > 370 s). FALSIFIED.
++- Decision: the two switches were not the binding constraint. The prompts are ~390 tokens and a prefill step is
++  ~38 ms, so with max_tbt_slo 0.05 s and phase "prefill" (decode-only steps admit nothing) almost no step has room
++  for a 500-900-token sample. Next run (rsi-mix) relaxes the SLO (ttft 0.5, max_tbt 0.2 = DeltaServe's default) and
++  uses phase "both", and at the same time makes the workload less thin (mixed formula + finer traffic, 4 FT rounds)
++  and adds the vLLM + torchtune baseline the user asked for.
++
++### rsi-mix — mixed RSI traffic (formula + finer) + 4 FT rounds: seq vs DeltaServe co-serving (relaxed SLO) vs vLLM+torchtune   (2026-10-26, fs-mbz-gpu-198 ×8 H200, job 2721371)
++- Reflection/audit: rsi-poisson / rsi-tracelab / rsi-tracelab-ride all found DeltaServe co-serving barely trains
++  under traffic (≈ 6-10 % of standalone at 1 rps). ride showed the factor-0 / RPS-throttle switches were not the
++  cause; the binding constraint is the SLO + admission phase (max_tbt 0.05 s vs a ~38 ms prefill step; decode-only
++  steps admit nothing under phase "prefill"). The user also called the experiments thin (one task, one FT job,
++  no external baseline) and asked for (a) a relaxed SLO, (b) several FT rounds per run, (c) finer + formula
++  together, (d) a comparison with vLLM + torchtune (DeltaServe-Baselines).
++- What changed vs rsi-tracelab:
++  - traffic: ACE formula + finer train splits interleaved 1:2 (500 + 1000 requests; finer prompts ~1.8K tokens,
++    formula ~390), TraceLab session timing (agent_trace.py: r1 = 200 sessions @ 0.072/s ≈ 1.0 rps, r2 = 300 @ 0.15/s
++    ≈ 2.1 rps over 750 s), sending stops at 750 s (or when the 1500 requests are used up).
++  - FT: 4 rounds (rsi_mix_prep.py: round k = chunk k of formula traces SFT (427 rows) + chunk k of data_v2/finer
++    (277 rows); 172 samples / ~230K tokens each, 1 epoch), started at 120 / 270 / 420 / 570 s. DeltaServe: round 0
++    = launch corpus + /start_finetuning, rounds 1-3 POST /ft/ingest. Round k "done" = cumulative trained input
++    tokens reach rounds 0..k.
++  - DeltaServe co: ttft_slo 0.5, max_tbt_slo 0.2 (DeltaServe default), coserving_admission_phase both, factor -1,
++    no RPS throttle. seq: same server, FT alone per round (traffic held).
++  - tt: stock vLLM 0.21.0 (baseline-vllm venv, plain Qwen3-32B, TP=4, gpu_mem 0.45, LoRA on, max_num_batched 16384,
++    long_prefill 2048, MPS 80 %) + torchtune 0.6.1 lora_finetune_distributed (FSDP 4 ranks, batch 1/rank, its own
++    weights, activation checkpointing, MPS 20 %), same LoRA recipe (qkvo r16 a32, lr 1e-4 constant, wd 0), the same
++    rendered + masked samples (tt_rsi.rounds_dataset; a round's samples block until the driver releases it).
++    Caveats: plain RoPE vs DeltaServe's YaRN config (no compute difference at these lengths); different engine
++    version (0.21.0 vs our 0.21.1rc0 fork); torchtune steps every 4 samples, DeltaServe every 16K tokens.
++- Standalone FT (measured): torchtune alone on GPUs 4-7, all 4 rounds: 5.3K tok/s. DeltaServe's from the seq cells.
++- Command: `ROUNDS=work/runs/rsimix/rounds WORKLOAD=work/runs/rsimix/workload_r$r.json [TTFT_SLO=0.5 MAX_TBT_SLO=0.2
++  PHASE=both] scripts/rsi_mix.sh <seq|co|tt> <gpus> <port> work/runs/rsimix/<cell>_r$r` via work/rsimix.sh
++  (batch 1: co r1 on 0-3 + tt r1 on 4-7; batch 2: seq r1 + co r2; batch 3: seq r2 + tt r2).
++- Criteria:
++  - (1) co FT share during traffic at 1 rps ≥ 40 % (was 6-10 %).
++  - (2) co mean round wait ≤ 150 s (keeps up with a round every 150 s) at 1 rps.
++  - (3) co request p90 < seq request p90, and co agent-task p90 < seq's (seq holds traffic ~4 × 60 s).
++  - (4) co beats tt on mean round wait at equal or better request p90.
++- Predicted:
++  - seq: round wait ≈ 60 s (230K / ~4.5K tok/s + drain); request p90 ≈ 20-40 s at 2 rps from the holds.
++  - co: FT share ≈ 50 % at 1 rps, 30 % at 2 rps; round wait ≈ 100 / 160 s; request p90 within 1.3× co-strict
++    (≈ 3-5 s on this longer traffic); max-TBT p99 rises to ~150-200 ms (the price of max_tbt 0.2).
++  - tt: torchtune at a 20 % SM cap ≈ 25-35 % of its 5.3K under traffic -> round wait ≈ 150-250 s (falls behind);
++    request p90 ≈ 1.2-1.5× co (vLLM at an 80 % SM cap plus memory-bandwidth contention).
++  - FALSIFIED if co FT share at 1 rps < 25 %, or co request p90 > 2× co's TTFT-only change would explain, i.e. > 8 s.
++- Incidents (all invalid cells kept under work/runs/rsimix/{prefix,tt_failed,confounded}):
++  - editing rsi_mix.sh while a cell ran it broke batch 1 (bash reads scripts lazily); teardown did not kill the
++    DeltaServe serve process (own session), so the next cell's health check hit the old server; the fixed teardown
++    then killed the batch's process group once. Fixed: cleanup scoped to the cell's out-dir/port.
++  - vLLM under MPS: a client cap of 60/75/80/85 % (and 70 % on the full model) makes cuBLAS bf16 GEMMs (torch
++    2.11 + cu129) return garbage ("!!!!" outputs); 100 % + torchtune 20 % deadlocked vLLM's TP all-reduce once
++    torchtune trained. The vLLM+torchtune baseline therefore runs time-sliced (no MPS), like DeltaServe's child.
++    (DeltaServe-Baselines' 80/20 results on fs-mbz-gpu-903 probably measured latency on corrupted outputs.)
++  - GPU 2 of fs-mbz-gpu-198 thermal-throttles to half speed (83 C, reason 0x20, 356 vs ~665 TFLOP/s) since
++    ~16:55 2026-10-26; every TP=4 run on GPUs 0-3 after that was ~2x slower (co_r2 twice). Later runs use 4-7.
++- DeltaServe bug found and fixed (dserve-vllm deltaserve/ft_save_op.py, accumulate.py, v1/worker/gpu_worker.py):
++  the graph-capturable save op gathered max_saved (16384) rows on each of its 448 calls per mixed step, ~150 ms
++  of GPU time per FT-carrying step on Qwen3-32B TP=4 regardless of FT size; the estimator learned "any FT step
++  >= 180 ms" and FT never rode an inference step (pre-fix co r1: FT ~10 % of standalone during traffic). Now a
++  capture gathers graph_ft_max_tokens rows and the uncaptured path the step's own count (tests/test_ft_save_op.py
++  42/42). Pre-fix co cells are in prefix/.
++- Actual (rsi_mix_report.py; standalone DeltaServe FT 3.4K tok/s from seq; co = post-fix, ttft 0.5 / max_tbt 0.2
++  / phase both; tt = time-sliced):
++  | rps | sys | request p50/p90/p99 s | agent task p50/p90 s | round wait mean s | all rounds done s | max-TBT p99 ms |
++  | 1 | seq | 2.6 / 4.1 / 70.9 | 80 / 221 | 70 | 640 | 170 |
++  | 1 | co  | 3.1 / 7.3 / 11.9 | 55 / 217 | 302 | 902 | 1081 |
++  | 1 | tt  | 2.9 / 11.9 / 23.5 | 60 / 258 | 112 | 683 | 1191 |
++  | 2 | seq | 2.8 / 4.6 / 73.6 | 57 / 252 | 72 | 642 | 200 |
++  | 2 | tt  | 3.4 / 16.8 / 29.9 | 73 / 267 | 121 | 689 | 1191 |
++  | 2 | co  | 4.9 / 9.3 / 13.9 | 55 / 242 | 191 | 781 | 1177 |
++  (2 rps co on healthy GPUs 4-7; the two runs on GPUs 0-3 were slowed by the throttled GPU 2 and are in confounded/.)
++  Accuracy equal across systems (formula ~70 %, finer ~27 %: the base model serves all traffic).
++  Criteria at 1 rps: (1) FT share 29 % < 40 % FAIL; (2) round wait 302 s > 150 s FAIL; (3) p90 7.3 > seq 4.1 FAIL,
++  agent-task p90 217 < 221 PASS (barely); (4) co round wait 302 > tt 112 FAIL. Not falsified (share > 25 %), but
++  co-serving loses on keeping up with the RSI loop.
++- Decision: the user asked to fix the training scheduler. Diagnosis on diag2 (1 rps, post-fix trace): forward is
++  no longer the limit (84 mixed steps carried 178K FT tokens in 14 s); backward pending (admission closed) 80 of
++  240 s with cycles of 6.7 s vs ~3.8 s alone (paused on every prefill); ~146 s admission open but nothing fit
++  (finer samples' mixed step ~170 ms vs the 0.7 x 0.2 = 140 ms decode-only budget). Next run: rsi-mix-sched.
++
++### rsi-mix-sched — DeltaServe co-serving with the scheduler fixes   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7, job 2721371)
++- Changes (all config-gated, defaults = previous behaviour):
++  - finetune.pause_min_prefill_tokens (new): pause the backward child only for steps with >= N inference prefill
++    tokens. Run: 4096 (no single step of this traffic reaches it; prefills are time-sliced against the child).
++  - slo.ft_decode_stall_budget / ft_stall_window_s (new): average-TBT gate, the share of wall time in a window that
++    FT may add (predicted) to steps carrying decodes. Run: 0.3 over 2 s. tests/test_ft_stall_gate.py 4/4.
++  - slo.decode_only_ft_safety_margin 0.7 -> 1.0 (the ft_mixed regime is fitted by the profiling pass).
++- Command: `ROUNDS=work/runs/rsimix/rounds WORKLOAD=work/runs/rsimix/workload_r$r.json TTFT_SLO=0.5 MAX_TBT_SLO=0.2
++  PHASE=both DECODE_MARGIN=1.0 PAUSE_MIN_PREFILL=4096 STALL_BUDGET=0.3 STEP_TRACE=1 scripts/rsi_mix_v2.sh co 4,5,6,7
++  8100 work/runs/rsimix/cofix_r$r` (r1 then r2, work/rsimix11.sh). Same traffic, rounds and data as rsi-mix.
++- Predicted (1 rps): backward cycles ~4 s; FT share during traffic 55-70 %; round wait 100-150 s (keeps up);
++  request p90 6-9 s (more stall than co, bounded by the gate); max-TBT p99 ~1 s (backward time-slicing, unchanged).
++  2 rps: no starvation (backward completes during traffic); round wait 150-250 s.
++- Criteria: (1) 1 rps round wait <= 150 s; (2) FT share >= 50 %; (3) request p99 < tt's (23.5 s) and agent-task
++  p50 <= tt's; (4) 2 rps trains during traffic (share > 20 %).
++- FALSIFIED if 1 rps FT share < 40 % or round wait > 200 s (then the binding limit is the closed admission during
++  backward, i.e. the single activation buffer, not pausing or the decode budget).
++- Actual (cofix_r1 / cofix_r2 vs co_r1 / co_r2, same GPUs 4-7 class, rsi_mix_report.py):
++  | rps | sys | request p50/p90/p99 s | TTFT p99 ms | agent task p50/p90 s | round wait mean s | all done s | FT share |
++  | 1 | co    | 3.1 / 7.3 / 11.9 | 605  | 55 / 217 | 302 | 902 | 0.29 |
++  | 1 | cofix | 5.1 / 10.1 / 14.8 | 1959 | 83 / 239 | 176 | 769 | 0.41 |
++  | 2 | co    | 4.9 / 9.3 / 13.9 | 967  | 55 / 242 | 191 | 781 | 0.40 |
++  | 2 | cofix | 6.3 / 12.0 / 19.6 | 2446 | 67 / 266 | 166 | 758 | 0.43 |
++  (tt: 1 rps 2.9 / 11.9 / 23.5, round wait 112; 2 rps 3.4 / 16.8 / 29.9, round wait 121.)
++  Criteria: (1) 176 > 150 FAIL; (2) 0.41 < 0.50 FAIL; (3) p99 14.8 < 23.5 PASS, agent p50 83 > tt 60 FAIL;
++  (4) 2 rps trains during traffic PASS (it already did on healthy GPUs). Not falsified (share > 0.40, wait < 200).
++  Trace (cofix_r1): backward pending 444 of 632 s; cycles 7.7 s (3.5 s alone) — the child time-slices ~50/50 with
++  the continuous decodes (decode step 8.5 -> 19 ms while it runs); forward is not a limit (895K FT tokens rode
++  357 steps in 57 s). Prefills no longer pause the child: their p99 with a backward running is 1.07 s (TTFT p99 2 s).
++- Decision: the fixes move DeltaServe along the trade-off (round wait -42 % at 1 rps, -13 % at 2 rps; request
++  p50/p90 +30-60 %), not past torchtune. The remaining training gap is the backward's GPU efficiency: alone it
++  does 4.3K tok/s (+ forward = 3.4K) vs torchtune's 5.4K fwd+bwd with recompute (~25 % MFU on 32B TP=4). Next:
++  profile the backward cycle (graph coverage, per-layer pause boundaries, NCCL residual reduces), and sweep
++  pause_min_prefill / stall budget for the latency side.
++
++### rsi-mix-loose — the scheduler fixes with a looser SLO   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7, queued behind carbon3)
++- Why: the user asked to relax the SLO. cofix (ttft 0.5, max_tbt 0.2, stall 0.3) cut the round wait 42 % at 1 rps but
++  the binding limit is now the backward's time-sliced GPU share, so a looser SLO mostly buys FT admission that is
++  already not the bottleneck. Expect a small gain in training and the latency results judged against a looser bar.
++- Changes vs cofix: ttft_slo 1.0 (DeltaServe default), max_tbt_slo 0.3, ft_decode_stall_budget 0.5.
++- Command: work/rsimix12.sh (waits for GPUs 4-7 to be idle 2 min, then coloose_r1, coloose_r2 via rsi_mix_v2.sh).
++- Caveat: cofix_r2 (13:13-13:30) overlapped another session's carbon2 run on GPUs 0-3 (same node, CPU/PCIe shared).
++- Predicted: round wait 1 rps 150-170 s, 2 rps 150-160 s; request p50 +10-20 % vs cofix; TTFT p99 ~2 s (unchanged:
++  prefill time-slicing, not admission). FALSIFIED if round wait drops below 130 s at 1 rps (then admission still
++  limited training, i.e. my bottleneck read is wrong).
++- Actual: (pending)
++- Actual (coloose_r1, 1 rps): round wait 130 / 134 / 134 / 137 s (mean 134; cofix 176, tt 112); request
++  2.6 -> 4.2 / 10.2 / 15.7 s p50/p90/p99; TTFT p99 1.09 s (cofix 1.96); agent task p50 89 s. Better than predicted
++  (150-170 s), just above the 130 s falsification line: admission was still part of the limit. 2 rps pending.
++
++### rsi-mix-fast — a 3.2x faster backward (TF32 + fused SDPA attention) under the loose-SLO scheduler   (2026-10-28, GPUs 4-7)
++- Audit: the user's goal is to beat vLLM + torchtune outright. DeltaServe's backward was the gap: alone 4.3K tok/s
++  vs torchtune 5.4K. Profile (eval-tp/profile_backward.py, one TP=4 rank shard, 15.6K tokens, real
++  Qwen3BackwardService on random weights): 78 % of the cycle in fp32 GEMMs on CUDA cores — the backward child is a
++  fresh spawned process, so its fp32 LM head (~1.4 s/cycle) and per-sample fp32 attention never used tensor cores.
++- Changes (config-gated, default off = bit-identical; default-path gates re-pass: qwen3 18/18, llama3 12/12,
++  long-context 26/26, qwen3 graph 475/475):
++  - finetune.backward_tf32: TF32 for the child's fp32 matmuls.
++  - finetune.backward_attn_sdpa: attention backward through torch SDPA (cuDNN flash kernel, bf16 in, fp32 acc)
++    instead of the materialized fp32 [Hq, L, L] scores (tests/test_attn_sdpa.py 18/18, rel-L2 2.5e-3 vs fp32).
++- Microbenchmark per 64-layer cycle (one rank): fp32 4.66 s -> TF32 2.56 s -> TF32+SDPA 1.45 s (per layer 50 ->
++  36 -> 19 ms; fixed 1429 -> 238 ms). Precision vs strict fp32 (eval-tp/tf32_check.py): loss rel 7e-7, LoRA grads
++  rel-L2 0.9-1.2 %, cosine >= 0.99993 — the bf16 bulk matmuls' own error.
++- Command: work/rsimix13.sh after coloose: cofast_r1, cofast_r2 (coloose knobs + BWD_TF32=1 BWD_SDPA=1,
++  rsi_mix_v3.sh), then seqfast_r1 (seq with the fast backward: standalone speed + loss-curve sanity vs seq_r1).
++- Predicted: backward cycle under traffic 7.7 s -> ~3.5 s; 1 rps round wait ~80-100 s (< tt 112), FT share
++  ~0.8-1.0 of the OLD standalone; request latency similar to coloose (backward occupies the GPU half as long,
++  so maybe better); seqfast round ~45 s (standalone ~5.5-6.5K tok/s, > torchtune 5.4K); seqfast loss curve
++  within noise of seq_r1. FALSIFIED if cofast_r1 round wait > 112 s (tt) or seqfast loss diverges from seq_r1.
++- Actual: (pending)
 diff --git a/README.md b/README.md
 index 477b361..8c66ce8 100644
 --- a/README.md
@@ -839,7 +1399,7 @@ index 0000000..810aae8
 +parallel:
 +  tensor_parallel_size: 4
 diff --git a/dserve-vllm/vllm/config/finetune.py b/dserve-vllm/vllm/config/finetune.py
-index 7d6d4be..2fc3157 100644
+index 7d6d4be..526b0fe 100644
 --- a/dserve-vllm/vllm/config/finetune.py
 +++ b/dserve-vllm/vllm/config/finetune.py
 @@ -42,7 +42,23 @@ class FinetuneConfig:
@@ -867,7 +1427,32 @@ index 7d6d4be..2fc3157 100644
  
      num_epochs: int = 1
      """Number of passes over the finetuning corpus (FinetuningStore.advance_epoch)."""
-@@ -101,6 +117,32 @@ class FinetuneConfig:
+@@ -64,6 +80,24 @@ class FinetuneConfig:
+     softmax, RMSNorm, LM head / final norm, fp32 LoRA master) are always fp32 either
+     way. Set True for strictly more accurate gradients at ~2x backward matmul cost."""
+ 
++    backward_tf32: bool = False
++    """Let the backward child's fp32 matmuls (LM head, attention scores) use TF32
++    tensor cores: fp32 inputs rounded to a 10-bit mantissa, fp32 accumulate and
++    output. The child is a fresh spawned process, so without this its fp32 GEMMs
++    run on CUDA cores — on Qwen3-32B TP=4 at 16K tokens the fp32 LM head alone is
++    ~1.4 s of a ~4.7 s cycle. Measured (eval-tp/profile_backward.py, one TP=4
++    rank shard, 15.6K tokens): 4.66 -> 2.56 s per 64-layer cycle; loss rel diff
++    7e-7, LoRA grads rel-L2 0.8-1.1 % / cosine >= 0.99994 vs fp32
++    (eval-tp/tf32_check.py), the same order as the bf16 bulk matmuls' own error.
++    Default False keeps strict fp32."""
++
++    backward_attn_sdpa: bool = False
++    """Run the eager attention backward through PyTorch's fused SDPA kernel
++    (flash attention: bf16 q/k/v, fp32 accumulation and softmax statistics in
++    the kernel) instead of the per-sample fp32 core that materializes the
++    ``[Hq, L, L]`` scores, causal mask and softmax. See
++    ``bwd_services/common/attention.py``. Default False keeps the fp32 core."""
++
+     backward_cuda_graph: bool = False
+     """Capture the per-layer forward-recompute, FFN-backward, and padded-
+     attention-backward sub-regions of each layer's manual SFT backward as CUDA
+@@ -101,6 +135,32 @@ class FinetuneConfig:
      """Per-backward FT token budget. Also sizes the shared activation buffers and
      bounds length-bucketed sample selection."""
  
@@ -900,7 +1485,45 @@ index 7d6d4be..2fc3157 100644
      save_activations: bool = True
      """Whether to actually accumulate FT activations into the shared buffers.
      Set False to measure the activation-save overhead: FT samples are still
-@@ -476,15 +518,22 @@ class FinetuneConfig:
+@@ -294,6 +354,18 @@ class FinetuneConfig:
+     Independent of the standard 0.9 × ttft_slo TTFT margin, which still
+     applies everywhere."""
+ 
++    ft_decode_stall_budget: float = 0.0
++    """Average-TBT gate: the largest share of wall time, over a sliding
++    ``ft_stall_window_s`` window, that FT may add to steps carrying decodes
++    (the predicted step time with the admitted FT minus the step's baseline
++    prediction). ``max_tbt_slo`` bounds one stall; this bounds how often they
++    happen, so the decodes' average TBT stays near ``1 / (1 - budget)`` of its
++    FT-free value. 0 (default) disables the gate. E.g. 0.3 lets FT add at most
++    0.6 s of decode stall in any 2 s."""
++
++    ft_stall_window_s: float = 2.0
++    """[ft_decode_stall_budget] Sliding-window length in seconds."""
++
+     profile_on_launch: bool = True
+     """Run the offline execution-time profiling pass at launch (before serving)
+     to seed the SLO estimator. When False, the estimator starts cold and relies
+@@ -457,6 +529,18 @@ class FinetuneConfig:
+     stepping while a backward is outstanding, so the check always runs). Cost:
+     the child yields for the whole prefill instead of one layer."""
+ 
++    pause_min_prefill_tokens: int = 0
++    """Pause the backward child only for steps carrying at least this many
++    INFERENCE prefill tokens (FT tokens excluded). 0 (default) keeps today's
++    rule: any prefill-carrying step pauses it. A short prefill time-sliced
++    against the child stays far inside a loose TTFT SLO (Qwen3-32B TP=4: a
++    400-2K-token prefill is 40-80 ms alone, ~2x that time-sliced, vs a 0.5 s
++    SLO), while pausing on every prefill starves the child under steady
++    traffic: backward cycles 3.8 s alone -> 6.7 s at 1 rps, and at 2 rps of
++    2K-token prompts the first cycle never finished while traffic ran
++    (rsi-mix, 2026-10-26). The decision reads only the scheduler's step
++    features, so it is identical on every TP rank."""
++
+     # --- fwd-token throttle (extends the prefill-gated pause) ---
+     fwd_token_throttle_enable: bool = False
+     """Master switch for the fwd-token-throttle pause source. When False
+@@ -476,15 +560,22 @@ class FinetuneConfig:
              or (enable and total > fwd_token_throttle)   # new rule
          )
  
@@ -927,6 +1550,49 @@ index 7d6d4be..2fc3157 100644
  
      # --- rps-throttle (closes FT admission under bursts) ---
      rps_throttle_enable: bool = False
+diff --git a/dserve-vllm/vllm/deltaserve/accumulate.py b/dserve-vllm/vllm/deltaserve/accumulate.py
+index a1bbf57..c58d886 100644
+--- a/dserve-vllm/vllm/deltaserve/accumulate.py
++++ b/dserve-vllm/vllm/deltaserve/accumulate.py
+@@ -265,6 +265,9 @@ class FinetuneAccumulator:
+                                     pin_memory=(torch.device(device).type == "cuda"))
+         self._idx_pin_pos = 0
+         self.op_bufs: list = []
++        # Rows a captured has_ft graph gathers per save: the most FT tokens such
++        # a step can carry. The runner lowers it to graph_ft_max_tokens.
++        self.op_capture_rows = self.max_saved
+         self.op_ready = False
+         self._op_marker = None
+ 
+@@ -358,13 +361,16 @@ class FinetuneAccumulator:
+                f"(+ final norm) — mixed FT batches may replay CUDA graphs")
+         return True
+ 
+-    def capture_state(self):
++    def capture_state(self, rows: int | None = None):
+         """The ``ft_save`` context value for capturing / running a has_ft
+         graph: the persistent index tensors as they are (scratch-pointing
+-        at capture) and the slot table."""
++        at capture) and the slot table. A capture gathers
++        ``op_capture_rows`` rows; ``arm_op_step`` passes the step's own
++        count for the uncaptured path (a replay never runs this Python)."""
+         from vllm.deltaserve.ft_save_op import FtSaveState
+ 
+-        return FtSaveState(src=self.ft_src, dst=self.ft_dst, bufs=self.op_bufs)
++        return FtSaveState(src=self.ft_src, dst=self.ft_dst, bufs=self.op_bufs,
++                           rows=self.op_capture_rows if rows is None else rows)
+ 
+     def arm_op_step(self, positions, num_ft: int, offset: int):
+         """Refresh the index tensors for this step: ``positions`` are the FT
+@@ -384,7 +390,7 @@ class FinetuneAccumulator:
+             stage[1, :n] = torch.arange(offset, offset + n, dtype=torch.int64)
+         self.ft_src.copy_(stage[0], non_blocking=True)
+         self.ft_dst.copy_(stage[1], non_blocking=True)
+-        return self.capture_state()
++        return self.capture_state(rows=max(n, 0))
+ 
+     def register_hooks(self) -> None:
+         for layer, mod in self._layer_in_modules.items():
 diff --git a/dserve-vllm/vllm/deltaserve/backward_process.py b/dserve-vllm/vllm/deltaserve/backward_process.py
 index 118b71a..99f8495 100644
 --- a/dserve-vllm/vllm/deltaserve/backward_process.py
@@ -1008,10 +1674,10 @@ index f499c52..fe525b7 100644
                  import traceback
                  dprint(f"[backward] backward failed: {e}")
 diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py
-index a87a2c1..30b9fef 100644
+index a87a2c1..78d4bed 100644
 --- a/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py
 +++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/attention.py
-@@ -10,12 +10,31 @@ back to these when a batch overflows the padded bounds. Scores/softmax and
+@@ -10,12 +10,57 @@ back to these when a batch overflows the padded bounds. Scores/softmax and
  the dQ/dK/dV products always run in fp32 (the load-bearing GQA precision rule;
  downgrading them plateaued Llama-3 loss in DeltaServe). ``dims`` is
  ``(Hq, Hkv, Hd, kv_size)``.
@@ -1022,6 +1688,12 @@ index a87a2c1..30b9fef 100644
 +instead of ``[Hq, L, L]``. The dropped keys are exactly the masked ones, so the
 +math is the dense math; only the GEMM/reduction tiling differs. Short samples
 +keep the dense path unchanged.
++
++``set_sdpa(True)`` (meta ``backward_attn_sdpa``) swaps the eager backward core for
++PyTorch's fused SDPA kernel (flash attention): bf16 q/k/v, fp32 accumulation and
++softmax statistics inside the kernel, the per-sample causal attention recomputed
++and differentiated by ``torch.autograd.grad``. It replaces the materialized fp32
++``[Hq, L, L]`` scores, mask and softmax (most of a layer's backward at 16K tokens).
  """
  
  import math
@@ -1033,6 +1705,26 @@ index a87a2c1..30b9fef 100644
 +# the cores chunk over query rows (512 MB → C=512 rows at Hq=16, L=16K).
 +SCORES_BYTES = int(os.environ.get("DSERVE_ATTN_SCORES_BYTES", 512 << 20))
 +
++_SDPA = False
++
++
++def set_sdpa(enabled: bool) -> None:
++    """Route ``attn_backward_core`` through the fused SDPA kernel (see module doc)."""
++    global _SDPA
++    _SDPA = bool(enabled)
++
++
++def _sdpa_backward(q, k, v, g, scale):
++    """One sample's causal attention backward through the fused SDPA kernel.
++    ``q`` [Hq, L, Hd], ``k``/``v`` [Hq, L, Hd] (GQA-repeated), ``g`` [Hq, L, Hd],
++    all bf16/fp16. Returns ``(gq, gk, gv)`` in the same layout and dtype."""
++    q, k, v = (t.detach().unsqueeze(0).requires_grad_() for t in (q, k, v))
++    with torch.enable_grad():
++        out = torch.nn.functional.scaled_dot_product_attention(
++            q, k, v, is_causal=True, scale=scale)
++        gq, gk, gv = torch.autograd.grad(out, (q, k, v), g.unsqueeze(0))
++    return gq[0], gk[0], gv[0]
++
 +
 +def _q_chunk(hq: int, ln: int) -> int:
 +    """Query rows per chunk for a sample of length ``ln``; ``ln`` = dense."""
@@ -1043,7 +1735,7 @@ index a87a2c1..30b9fef 100644
  
  def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
      """Causal GQA attention over the packed batch. ``qh`` [n, Hq, Hd],
-@@ -35,6 +54,12 @@ def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
+@@ -35,6 +80,12 @@ def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
              v_rep = v_blk.repeat_interleave(kv_repeat, 0)
          else:
              k_rep, v_rep = k_blk, v_blk
@@ -1056,7 +1748,7 @@ index a87a2c1..30b9fef 100644
          scores = (q_blk.float() @ k_rep.float().transpose(-1, -2)) * scale
          mask = torch.triu(
              torch.ones(ln, ln, dtype=torch.bool, device=qh.device), 1)
-@@ -45,6 +70,52 @@ def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
+@@ -45,6 +96,52 @@ def attn_forward_core(qh, kh, vh, seq_lens, b_start, dims, out_dtype):
      return torch.cat(ctx_blocks, 0).reshape(n, Hq * Hd)
  
  
@@ -1109,7 +1801,32 @@ index a87a2c1..30b9fef 100644
  def attn_backward_core(qh, kh, vh, grad_ctx, seq_lens, b_start, dims, cdt=torch.float32,
                         *, grad_qh_buf=None, grad_kh_buf=None, grad_vh_buf=None):
      """Per-sample GQA attention backward (eager). Returns (grad_qh, grad_kh,
-@@ -90,17 +161,23 @@ def attn_backward_core(qh, kh, vh, grad_ctx, seq_lens, b_start, dims, cdt=torch.
+@@ -80,6 +177,24 @@ def attn_backward_core(qh, kh, vh, grad_ctx, seq_lens, b_start, dims, cdt=torch.
+         grad_qh = torch.zeros((n, Hq, Hd), dtype=cdt, device=device)
+         grad_kh = torch.zeros((n, Hkv, Hd), dtype=cdt, device=device)
+         grad_vh = torch.zeros((n, Hkv, Hd), dtype=cdt, device=device)
++    if _SDPA:
++        lp = qh.dtype if qh.dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
++        for st, ln in zip(b_start, seq_lens):
++            q_blk = qh[st:st + ln].transpose(0, 1).to(lp)       # [Hq, L, Hd]
++            k_blk = kh[st:st + ln].transpose(0, 1).to(lp)       # [Hkv, L, Hd]
++            v_blk = vh[st:st + ln].transpose(0, 1).to(lp)
++            if kv_repeat != 1:
++                k_blk = k_blk.repeat_interleave(kv_repeat, 0)
++                v_blk = v_blk.repeat_interleave(kv_repeat, 0)
++            g = grad_ctx[st:st + ln].transpose(0, 1).to(lp)
++            gq, gk, gv = _sdpa_backward(q_blk, k_blk, v_blk, g, scale)
++            if kv_repeat != 1:
++                gk = gk.float().view(Hkv, kv_repeat, ln, Hd).sum(1)
++                gv = gv.float().view(Hkv, kv_repeat, ln, Hd).sum(1)
++            grad_qh[st:st + ln] = gq.transpose(0, 1).to(cdt)
++            grad_kh[st:st + ln] = gk.transpose(0, 1).to(cdt)
++            grad_vh[st:st + ln] = gv.transpose(0, 1).to(cdt)
++        return grad_qh, grad_kh, grad_vh
+     qh_f, kh_f, vh_f = qh.float(), kh.float(), vh.float()
+     for st, ln in zip(b_start, seq_lens):
+         q_blk = qh_f[st:st + ln].transpose(0, 1)     # [Hq, L, Hd] fp32
+@@ -90,17 +205,23 @@ def attn_backward_core(qh, kh, vh, grad_ctx, seq_lens, b_start, dims, cdt=torch.
              v_rep = v_blk.repeat_interleave(kv_repeat, 0)
          else:
              k_rep, v_rep = k_blk, v_blk
@@ -1414,7 +2131,7 @@ index 0874c4f..2a52fff 100644
      def group_done(self, layer: int) -> torch.Tensor | None:
          """The flat slice to reduce if ``layer`` closes a group, else None."""
 diff --git a/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py b/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py
-index c875eaf..4704692 100644
+index c875eaf..ed725b7 100644
 --- a/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py
 +++ b/dserve-vllm/vllm/deltaserve/bwd_services/common/trainer.py
 @@ -139,6 +139,7 @@ class LoraSftTrainerService(BackwardService):
@@ -1425,7 +2142,21 @@ index c875eaf..4704692 100644
          self.eps = float(meta["rms_norm_eps"])
          self.scaling = float(meta.get("lora_scaling", 1.0))
          self.vocab = int(meta["vocab_size"])
-@@ -215,6 +216,13 @@ class LoraSftTrainerService(BackwardService):
+@@ -183,6 +184,13 @@ class LoraSftTrainerService(BackwardService):
+         # config flag is set. Attention core / RMSNorm-bwd / LM-head stay fp32.
+         self.base_dtype = self.lm_w.dtype
+         self.bwd_dtype = torch.float32 if meta.get("backward_fp32") else self.base_dtype
++        # fp32 matmuls (LM head, attention scores) on TF32 tensor cores — this
++        # child is a fresh process, so the setting is ours alone.
++        if meta.get("backward_tf32"):
++            torch.backends.cuda.matmul.allow_tf32 = True
++        # Fused SDPA attention backward instead of the fp32 per-sample core.
++        from vllm.deltaserve.bwd_services.common import attention as _attn
++        _attn.set_sdpa(bool(meta.get("backward_attn_sdpa")))
+ 
+         # Per-layer views of the frozen base weights, per the family's map.
+         # Fused ([out,in]) tensors are sliced once into q/k/v and gate/up by
+@@ -215,6 +223,13 @@ class LoraSftTrainerService(BackwardService):
          # shard is a single contiguous slice at offset tp_rank * local_width.
          # tp_size=1 → lora_shard_slice is identity → single-GPU masters unchanged.
          params: list[nn.Parameter] = []
@@ -1439,7 +2170,7 @@ index c875eaf..4704692 100644
          for key, t in ft.items():
              m = _LORA_KEY_RE.search(key)
              if m is None:
-@@ -225,6 +233,7 @@ class LoraSftTrainerService(BackwardService):
+@@ -225,6 +240,7 @@ class LoraSftTrainerService(BackwardService):
              # fp32 master, contiguous so the fused AdamW + IPC publish are happy.
              param = nn.Parameter(shard.detach().clone().float().contiguous())
              self.lora.setdefault(layer, {}).setdefault(proj, {})[ab] = param
@@ -1447,7 +2178,7 @@ index c875eaf..4704692 100644
              params.append(param)
  
          # ``fused=True`` uses PyTorch's CUDA-fused AdamW kernel — one launch
-@@ -294,6 +303,11 @@ class LoraSftTrainerService(BackwardService):
+@@ -294,6 +310,11 @@ class LoraSftTrainerService(BackwardService):
                     "keeping eager")
              return
          s_max = int(meta.get("max_saved_finetuning_tokens", 0))
@@ -1459,7 +2190,7 @@ index c875eaf..4704692 100644
          bn_max = int(meta.get("backward_cuda_graph_attn_bn_max", 8))
          l_max = int(meta.get("backward_cuda_graph_attn_l_max", 64))
          if s_max <= 0:
-@@ -361,13 +375,19 @@ class LoraSftTrainerService(BackwardService):
+@@ -361,13 +382,19 @@ class LoraSftTrainerService(BackwardService):
  
      # -- the real backward (overrides base.process_backward) ------------------
  
@@ -1481,7 +2212,7 @@ index c875eaf..4704692 100644
          seq_lens = [int(s) for s in sample_lens]
          b_start, acc = [], 0
          for s in seq_lens:
-@@ -377,7 +397,7 @@ class LoraSftTrainerService(BackwardService):
+@@ -377,7 +404,7 @@ class LoraSftTrainerService(BackwardService):
          positions = torch.cat([
              torch.arange(s, device=device) for s in seq_lens]) if seq_lens else \
              torch.zeros(0, device=device)
@@ -1490,7 +2221,7 @@ index c875eaf..4704692 100644
          ids = activations["concat_input_ids"][:n]
          if os.environ.get("DSERVE_TP_DIAG") and self._diag_count < 5:
              self._diag_count += 1
-@@ -389,7 +409,8 @@ class LoraSftTrainerService(BackwardService):
+@@ -389,7 +416,8 @@ class LoraSftTrainerService(BackwardService):
          # Head: loss + grad w.r.t. final_in (pre-final-norm residual = layer_in[L]).
          loss, n_valid, g = head_backward(
              activations["final_in"][:n], self.lm_w, self.norm_w, self.eps,
@@ -1500,7 +2231,7 @@ index c875eaf..4704692 100644
  
          # Saved MLP pre-activations (gate||up) per layer, if captured in the forward
          # — lets the remat skip the gate_up matmul (the layer's biggest recompute).
-@@ -415,7 +436,6 @@ class LoraSftTrainerService(BackwardService):
+@@ -415,7 +443,6 @@ class LoraSftTrainerService(BackwardService):
          # If the graphed runner is attached, build per-backward scatter indices
          # + key-pad mask once (re-used across all L layers' padded-attention
          # replays). Eager fallback for batches that overflow the padded budget.
@@ -1508,7 +2239,7 @@ index c875eaf..4704692 100644
          if runner is not None:
              runner.begin_backward(n, seq_lens, b_start)
  
-@@ -535,10 +555,81 @@ class LoraSftTrainerService(BackwardService):
+@@ -535,10 +562,81 @@ class LoraSftTrainerService(BackwardService):
          # tensors inference reads). Safe with no locking: FT admission is closed for
          # the whole backward, so the adapter is idle until the done-reply reopens it.
          self._publish_to_served()
@@ -2144,7 +2875,7 @@ index 4d68bb6..2c16318 100644
          self.store.load()
  
 diff --git a/dserve-vllm/vllm/deltaserve/ft_meta.py b/dserve-vllm/vllm/deltaserve/ft_meta.py
-index 5f70c8b..71a1b3d 100644
+index 5f70c8b..8947a0c 100644
 --- a/dserve-vllm/vllm/deltaserve/ft_meta.py
 +++ b/dserve-vllm/vllm/deltaserve/ft_meta.py
 @@ -43,6 +43,37 @@ def rope_theta_of(hf_config: Any) -> float:
@@ -2185,7 +2916,7 @@ index 5f70c8b..71a1b3d 100644
  def read_lora_scaling(adapter_path: str | None) -> float:
      """``lora_alpha / r`` from the adapter's ``adapter_config.json`` (1.0 if
      the file is absent). The backward bakes this into B at publish time."""
-@@ -116,6 +147,7 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
+@@ -116,12 +147,15 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
          "head_dim": head_dim,
          "intermediate_size": int(hf_config.intermediate_size),
          "rope_theta": rope_theta_of(hf_config),
@@ -2193,7 +2924,15 @@ index 5f70c8b..71a1b3d 100644
          "lora_scaling": float(lora_scaling),
          # Optimizer hyperparameters (Phase 3 LoRA backward).
          "learning_rate": float(ft_cfg.learning_rate),
-@@ -134,6 +166,9 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
+         "weight_decay": float(ft_cfg.weight_decay),
+         "gamma": float(ft_cfg.gamma),
+         "backward_fp32": bool(ft_cfg.backward_fp32),
++        "backward_tf32": bool(getattr(ft_cfg, "backward_tf32", False)),
++        "backward_attn_sdpa": bool(getattr(ft_cfg, "backward_attn_sdpa", False)),
+         # CUDA-graph backward (Phase 5): bn_max/l_max bound the padded-attention
+         # region; s_max comes from max_saved_finetuning_tokens (the same value
+         # sizes the activation buffers, so graphs and the pool are aligned).
+@@ -134,6 +168,9 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
              int(ft_cfg.backward_cuda_graph_attn_l_max),
          "max_saved_finetuning_tokens":
              int(ft_cfg.max_saved_finetuning_tokens),
@@ -2203,7 +2942,7 @@ index 5f70c8b..71a1b3d 100644
          # Forward-side activation saves the backward may short-circuit on:
          # post-RoPE q/k/v per layer (``attn_qh/kh/vh``) and the attention
          # context (``attn_ctx``). The child re-checks ``save_attn_qkv`` against
-@@ -145,6 +180,12 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
+@@ -145,6 +182,12 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
          # head counts / intermediate size by tp_size to slice its LOCAL shards,
          # and uses tp_rank to slice the (full, disk-loaded) FT-adapter master
          # into this rank's LoRA shard. tp_size=1 → local == full.
@@ -2216,11 +2955,67 @@ index 5f70c8b..71a1b3d 100644
          "tp_size": int(tp_size),
          "tp_rank": int(tp_rank),
          # Rendezvous port for the backward-only NCCL group (the backward
+diff --git a/dserve-vllm/vllm/deltaserve/ft_save_op.py b/dserve-vllm/vllm/deltaserve/ft_save_op.py
+index f2cc1b1..d7f01b1 100644
+--- a/dserve-vllm/vllm/deltaserve/ft_save_op.py
++++ b/dserve-vllm/vllm/deltaserve/ft_save_op.py
+@@ -10,14 +10,19 @@ eager. This module is the graph-native replacement for **mixed** batches
+ (inference requests + FT samples):
+ 
+ * ``torch.ops.vllm.dserve_save_rows(x, r, marker, slot)`` gathers a FIXED
+-  number of rows (``max_saved``) of ``x`` (+ ``r`` when given — the fused
++  number of rows (``FtSaveState.rows``) of ``x`` (+ ``r`` when given — the fused
+   add-norm's residual sum) through a persistent *source-index* tensor and
+   writes them into the accumulator buffer for ``slot`` through a persistent
+   *destination-index* tensor. Both index tensors, and the buffer table, are
+   read from the forward context (``ForwardContext.ft_save``), never from the
+   graph: the FT rows' positions and the reserved offset are the CONTENTS of
+   the index tensors, refreshed before each step. Unused slots gather row 0
+-  into a scratch row past ``max_saved``.
++  into a scratch row past ``max_saved``. A captured graph gathers as many
++  rows as the largest has_ft graph can carry FT tokens
++  (``graph_ft_max_tokens``); the compiled-but-uncaptured path gathers exactly
++  this step's FT rows. (Gathering ``max_saved`` rows every call cost a fixed
++  ~150 ms per mixed step at a 16K-token buffer on Qwen3-32B TP=4 — 448 calls
++  x 16384 rows — and kept FT off every inference step.)
+ * Inside vLLM's compiled forward the op is opaque to Dynamo, so its Python
+   branch on ``ft_save`` runs at *capture* time: the plain graphs (captured
+   with ``ft_save = None``) contain no kernels for it, the ``has_ft`` graphs
+@@ -49,6 +54,7 @@ class FtSaveState:
+     src: torch.Tensor           # int64 [max_saved]: rows of x to gather
+     dst: torch.Tensor           # int64 [max_saved]: rows of the buffer to write
+     bufs: list                  # slot -> buffer [max_saved + 1, width] or None
++    rows: int | None = None     # rows to gather: src[:rows] (None = all)
+ 
+ 
+ def _dserve_save_rows(x: torch.Tensor, r: torch.Tensor | None,
+@@ -66,12 +72,14 @@ def _dserve_save_rows(x: torch.Tensor, r: torch.Tensor | None,
+     buf = fs.bufs[slot] if slot < len(fs.bufs) else None
+     if buf is None:
+         return
+-    rows = x.index_select(0, fs.src)
++    src, dst = ((fs.src, fs.dst) if fs.rows is None
++                else (fs.src[:fs.rows], fs.dst[:fs.rows]))
++    rows = x.index_select(0, src)
+     if r is not None:
+-        rows = rows + r.index_select(0, fs.src)
++        rows = rows + r.index_select(0, src)
+     if rows.dtype != buf.dtype:
+         rows = rows.to(buf.dtype)
+-    buf.index_copy_(0, fs.dst, rows)
++    buf.index_copy_(0, dst, rows)
+ 
+ 
+ def _dserve_save_rows_fake(x: torch.Tensor, r: torch.Tensor | None,
 diff --git a/dserve-vllm/vllm/deltaserve/ft_scheduler.py b/dserve-vllm/vllm/deltaserve/ft_scheduler.py
-index f72f195..5bbe499 100644
+index f72f195..e6d7984 100644
 --- a/dserve-vllm/vllm/deltaserve/ft_scheduler.py
 +++ b/dserve-vllm/vllm/deltaserve/ft_scheduler.py
-@@ -20,7 +20,7 @@ import time
+@@ -17,10 +17,11 @@ import csv
+ import datetime
+ import os
+ import time
++from collections import deque
  
  from vllm.config import CUDAGraphMode
  from vllm.deltaserve import dprint
@@ -2229,7 +3024,7 @@ index f72f195..5bbe499 100644
  from vllm.deltaserve.estimator import (
      MergedExecutionEstimator,
      StepExecutionTracker,
-@@ -79,6 +79,7 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -79,6 +80,7 @@ class FinetuneScheduler(AsyncScheduler):
          # knows when no more samples can fit (full).
          self._coord = get_coordinator(capacity=capacity,
                                        per_step_budget=capacity)
@@ -2237,7 +3032,18 @@ index f72f195..5bbe499 100644
          lengths = self._ft_injector.store.sorted_lengths
          if lengths:
              self._coord.min_sample_len = lengths[0]
-@@ -193,7 +194,12 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -162,6 +164,10 @@ class FinetuneScheduler(AsyncScheduler):
+         self._ttft_slo = float(ft_cfg.ttft_slo)
+         self._max_tbt_slo = float(ft_cfg.max_tbt_slo)
+         self._avg_tbt_slo = float(ft_cfg.avg_tbt_slo)
++        # Average-TBT gate: predicted decode stall FT added, (time, seconds).
++        self._stall_budget = float(getattr(ft_cfg, "ft_decode_stall_budget", 0.0))
++        self._stall_window = float(getattr(ft_cfg, "ft_stall_window_s", 2.0))
++        self._stalls: deque = deque()
+         # [async] Under pipelined (async) scheduling, schedule(N+1) runs while
+         # forward(N) is still on the GPU, so a request admitted now isn't
+         # prefilled until the in-flight step(s) finish. We add that queue wait to
+@@ -193,7 +199,12 @@ class FinetuneScheduler(AsyncScheduler):
          from transformers import AutoTokenizer
  
          tok = AutoTokenizer.from_pretrained(self.vllm_config.model_config.tokenizer)
@@ -2251,7 +3057,7 @@ index f72f195..5bbe499 100644
  
      # ─── SLO-aware FT admission budget ──────────────────────────────────
      def _current_step_features(self) -> tuple[StepFeatures, float | None]:
-@@ -245,6 +251,23 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -245,6 +256,23 @@ class FinetuneScheduler(AsyncScheduler):
                               b_d=b_d, k=k, prefill_lens=prefill_lens or None)
          return feats, earliest_arrival
  
@@ -2275,7 +3081,23 @@ index f72f195..5bbe499 100644
      def admit_ft_to_step(self) -> tuple[int, list]:
          """Three-regime SLO-aware FT admission. Replaces the previous
          closed-form quadratic ``_slo_ft_budget`` + ``next_ft_requests`` chain.
-@@ -433,6 +456,12 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -414,6 +442,15 @@ class FinetuneScheduler(AsyncScheduler):
+         # iteration predicts with EAGER regime (FT forces eager) and checks
+         # SLOs against the hypothetical-with-FT cost.
+         admitted: list = []
++        # Average-TBT gate: stall already spent in the window, if it applies.
++        stall_gate = (self._stall_budget > 0 and feats.b_d > 0
++                      and self._estimator.is_ready)
++        stall_used = 0.0
++        if stall_gate:
++            while self._stalls and self._stalls[0][0] < now - self._stall_window:
++                self._stalls.popleft()
++            stall_used = sum(x for _, x in self._stalls)
++        stall_add = 0.0
+         cur_t_in = float(feats.t_in)
+         cur_t_ft = 0.0
+         cur_p = int(feats.p)
+@@ -433,6 +470,12 @@ class FinetuneScheduler(AsyncScheduler):
                  break
              if cur_t_ft + candidate.input_len > token_cap:
                  break
@@ -2288,7 +3110,29 @@ index f72f195..5bbe499 100644
  
              # Hypothetical features with this sample added. Subset convention:
              # T_in += input_len AND T_ft += input_len (FT prefill is prefill).
-@@ -584,6 +613,15 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -460,6 +503,12 @@ class FinetuneScheduler(AsyncScheduler):
+                 if ttft_deadline is not None:
+                     if (ttft_deadline - now - queue_wait - t_with_ft) <= 0:
+                         break
++                if stall_gate:
++                    extra = max(0.0, t_with_ft - t_baseline)
++                    if (stall_used + extra
++                            > self._stall_budget * self._stall_window):
++                        break
++                    stall_add = extra
+             # (Cold-start: estimator not ready; admit up to token_cap unchecked.
+             # Matches the pre-redesign cold-start behavior where the coord
+             # buffer budget was the only cap.)
+@@ -477,6 +526,8 @@ class FinetuneScheduler(AsyncScheduler):
+         # ─── Stage 5: commit ────────────────────────────────────────────
+         if not admitted:
+             return 0, []
++        if stall_add > 0:
++            self._stalls.append((now, stall_add))
+         store.claim(admitted)
+         reqs = [self._ft_injector._make_request(s) for s in admitted]
+         return int(cur_t_ft), reqs
+@@ -584,6 +635,15 @@ class FinetuneScheduler(AsyncScheduler):
          if coord.epoch_flush_pending and (
                  coord.fill_count + coord.reserved_fill) > 0:
              return True  # flush flag set at inject → step so the backward fires  # epoch tail awaiting flush
@@ -2304,7 +3148,7 @@ index f72f195..5bbe499 100644
          # Otherwise step for FT only if a sample can ACTUALLY be admitted this
          # step (buffer space ≥ one sample). A partially-full buffer that can't
          # grow and isn't flush-pending is not work — returning True there would
-@@ -591,10 +629,9 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -591,10 +651,9 @@ class FinetuneScheduler(AsyncScheduler):
          # idles enough to let FT resume. `next_ft_budget` is buffer-space-based
          # (the SLO gate may still admit 0 under load, but then inference itself
          # keeps the engine busy via super().has_requests()).
@@ -2318,7 +3162,7 @@ index f72f195..5bbe499 100644
          # [diag] FT has nothing left to do — selectable pool drained AND no
          # epochs remain AND nothing is in-flight. Log once so the user can
          # distinguish a clean natural end ("ran out of epochs/samples") from
-@@ -823,8 +860,8 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -823,8 +882,8 @@ class FinetuneScheduler(AsyncScheduler):
          # inference arrival rate sliding-window exceeds the close
          # threshold, reopen when it drops below the open threshold.
          # See FinetuneCoordinator.check_rps_throttle for the design
@@ -2329,7 +3173,7 @@ index f72f195..5bbe499 100644
          _ft_cfg = self.vllm_config.finetune_config
          if _ft_cfg.rps_throttle_enable:
              import time as _t
-@@ -962,7 +999,11 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -962,7 +1021,11 @@ class FinetuneScheduler(AsyncScheduler):
              ft_samples = [s for s in ft_samples if s is not None]
              if ft_tokens > 0:
                  output._ft_write_offset = self._coord.reserve(
@@ -2342,7 +3186,7 @@ index f72f195..5bbe499 100644
              output._ft_samples = ft_samples
              output._ft_tokens_reserved = ft_tokens
          # Stash the admission snapshot on the output so _rollback_ft_step
-@@ -1133,7 +1174,8 @@ class FinetuneScheduler(AsyncScheduler):
+@@ -1133,7 +1196,8 @@ class FinetuneScheduler(AsyncScheduler):
                  self._coord.apply_relayed_done(_done)
              _saved = getattr(model_runner_output, "finetune_saved", None)
              if _saved:
@@ -2451,7 +3295,7 @@ index 2f389ed..0f12d59 100644
      # ``finetune_ft_started`` mirrors the worker coordinator's ft_started flag
      # (flipped by the collective_rpc from POST /start_finetuning, which only
 diff --git a/dserve-vllm/vllm/v1/worker/gpu_model_runner.py b/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
-index d1afade..d2d3a8d 100644
+index d1afade..514066e 100644
 --- a/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
 +++ b/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
 @@ -3974,6 +3974,7 @@ class GPUModelRunner(
@@ -2547,9 +3391,11 @@ index d1afade..d2d3a8d 100644
              if _idle_release and _idle_coord is not None:
                  _idle_coord.gpu_resume_backward()
                  self._throttle_held = False
-@@ -4573,19 +4578,11 @@ class GPUModelRunner(
+@@ -4571,21 +4576,16 @@ class GPUModelRunner(
+             if _feats is not None and (
+                     coord.pending_backward
                      or self.vllm_config.finetune_config.pause_prefill_always):
-                 _pause_prefill = _feats.t_in > 0
+-                _pause_prefill = _feats.t_in > 0
                  _ft_cfg = self.vllm_config.finetune_config
 -                if _ft_cfg.fwd_token_throttle_enable:
 -                    _throttle = int(_ft_cfg.fwd_token_throttle)
@@ -2564,6 +3410,10 @@ index d1afade..d2d3a8d 100644
 -                        _inf_prefill = int(_feats.t_in) - int(_feats.t_ft)
 -                        _total = _inf_prefill + int(_feats.b_d)
 -                        _pause_throttle = _total > _throttle
++                _min_pf = int(_ft_cfg.pause_min_prefill_tokens)
++                _pause_prefill = (
++                    _feats.t_in > 0 if _min_pf <= 0
++                    else int(_feats.t_in) - int(_feats.t_ft) >= _min_pf)
 +                # Count only inference work: an FT-only step must release
 +                # the throttle, while threshold zero protects even one decode.
 +                _total = (int(_feats.t_in) - int(_feats.t_ft)
@@ -2572,7 +3422,7 @@ index d1afade..d2d3a8d 100644
                  _pause_bwd = _pause_prefill or _pause_throttle
              # Cross-step throttle release: if a previous step left the
              # bwd paused for throttle reasons and this step's total has
-@@ -4859,10 +4856,12 @@ class GPUModelRunner(
+@@ -4859,10 +4859,12 @@ class GPUModelRunner(
                              # counts to the EngineCore scheduler, which owns the
                              # trigger decision (it has the corpus/min_sample_len).
                              self._ft_relay_saved = (
@@ -2587,7 +3437,7 @@ index d1afade..d2d3a8d 100644
  
                  sample_hidden_states = hidden_states[logits_indices]
                  logits = self.model.compute_logits(sample_hidden_states)
-@@ -4966,7 +4965,11 @@ class GPUModelRunner(
+@@ -4966,7 +4968,11 @@ class GPUModelRunner(
          ev = getattr(self, "_ft_resume_evt", None)
          if ev is not None and ev.query():
              self._ft_resume_evt = None
@@ -2601,10 +3451,21 @@ index d1afade..d2d3a8d 100644
      def _ft_abort_sentinel(self, coord):
          """[forward_interruptible / tier C] The empty output that tells the
 diff --git a/dserve-vllm/vllm/v1/worker/gpu_worker.py b/dserve-vllm/vllm/v1/worker/gpu_worker.py
-index c196baf..7f7237f 100644
+index c196baf..16cb804 100644
 --- a/dserve-vllm/vllm/v1/worker/gpu_worker.py
 +++ b/dserve-vllm/vllm/v1/worker/gpu_worker.py
-@@ -620,6 +620,8 @@ class Worker(WorkerBase):
+@@ -606,6 +606,10 @@ class Worker(WorkerBase):
+         # happens at the profile run — the call sites must see the slots).
+         if ft_cfg.graph_ft_batches:
+             accumulator.install_save_points(model)
++            # A has_ft graph step carries at most graph_ft_max_tokens tokens,
++            # so its captured gathers need no more rows than that.
++            accumulator.op_capture_rows = min(accumulator.max_saved,
++                                              int(ft_cfg.graph_ft_max_tokens))
+         ack = backward_process.share_activations(
+             accumulator.buffers, print_hash=ft_cfg.print_activation_hash)
+         dprint(f"shared activation buffers with backward process: {ack}")
+@@ -620,6 +624,8 @@ class Worker(WorkerBase):
          # idle/FT-only step can fill the buffer in one eager forward. During
          # co-serving the SLO gate caps FT tokens once the estimator is warm.
          coordinator = get_coordinator(capacity=cap, per_step_budget=cap)
@@ -2613,7 +3474,7 @@ index c196baf..7f7237f 100644
          coordinator.backward_process = backward_process
          coordinator.backward_sleep_s = float(ft_cfg.backward_sleep_seconds)
          # [DeltaServe] Phase 7 / M4.1: under TP>1 this worker-side coordinator is
-@@ -628,6 +630,12 @@ class Worker(WorkerBase):
+@@ -628,6 +634,12 @@ class Worker(WorkerBase):
          # SchedulerOutput command) + poll_backward_relay, and reports both back
          # via ModelRunnerOutput; the scheduler owns the trigger decision + store.
          coordinator.relay_mode = tp_size > 1
@@ -2626,7 +3487,7 @@ index c196baf..7f7237f 100644
          # [forward_interruptible / tier C] Wire the accumulator's per-layer
          # abort check to the coordinator's threading.Event. The hook does a
          # cheap None-check first, so this is zero-cost when the feature is
-@@ -707,6 +715,9 @@ class Worker(WorkerBase):
+@@ -707,6 +719,9 @@ class Worker(WorkerBase):
  
          am = self.model_runner.lora_manager._adapter_manager
          slot = am.lora_index_to_id.index(FT_LORA_INT_ID)
@@ -2636,7 +3497,7 @@ index c196baf..7f7237f 100644
  
          # Gather the FT adapter's served stacked buffers: qkv_proj (3 slices q/k/v)
          # + o_proj (1 slice), per layer. The trainer writes [slot] rows into these.
-@@ -730,6 +741,34 @@ class Worker(WorkerBase):
+@@ -730,6 +745,34 @@ class Worker(WorkerBase):
          dprint(f"shared served LoRA buffers (slot={slot}, {len(layers)} layers) "
                 f"with backward process: {ack}")
  
@@ -2671,7 +3532,7 @@ index c196baf..7f7237f 100644
      def update_config(self, overrides: dict[str, Any]) -> None:
          self.model_runner.update_config(overrides)
  
-@@ -1133,6 +1172,11 @@ class Worker(WorkerBase):
+@@ -1133,6 +1176,11 @@ class Worker(WorkerBase):
  
          activate_triton_jit_monitor()
  
@@ -3216,6 +4077,159 @@ index 0000000..70303e4
 +model.save_pretrained(args.out)
 +tok.save_pretrained(args.out)
 +print("SAVED", args.out, flush=True)
+diff --git a/eval-tp/profile_backward.py b/eval-tp/profile_backward.py
+new file mode 100644
+index 0000000..3b59a98
+--- /dev/null
++++ b/eval-tp/profile_backward.py
+@@ -0,0 +1,118 @@
++#!/usr/bin/env python
++"""Profile one LoRA backward cycle at production shape on ONE GPU.
++
++Builds the real Qwen3 backward service (``Qwen3BackwardService``) on random weights with
++the per-rank shard of Qwen3-32B at TP=4 (hidden 5120, 16 q heads, 2 kv heads, head 128,
++intermediate 6400, full 151936 vocab head) and ``--layers`` layers, feeds it a captured-
++activation dict with every production save on (gate_up, q/k/v, ctx, resid_mid), and times
++``process_backward`` on a 16K-token batch of mixed sample lengths. No TP collectives (one
++rank's compute only). Prints wall time per cycle scaled to 64 layers and the top CUDA ops.
++
++    CUDA_VISIBLE_DEVICES=0 python eval-tp/profile_backward.py [--layers 8] [--lens 2400x6,600x2]
++        [--run-ahead 2] [--trace out.json]
++"""
++import argparse
++import time
++
++import torch
++
++from vllm.deltaserve.bwd_services.qwen3 import Qwen3BackwardService
++
++
++def build(layers, run_ahead, s_max, dev, dt, tf32=False, sdpa=False):
++    D, Hq, Hkv, Hd, inter, vocab, r = 5120, 16, 2, 128, 6400, 151936, 16
++    fam = Qwen3BackwardService.family
++    q, kv = Hq * Hd, Hkv * Hd
++    torch.manual_seed(0)
++    g = torch.Generator(device=dev).manual_seed(0)
++
++    def w(*s):
++        return (torch.randn(*s, device=dev, generator=g) * s[-1] ** -0.5).to(dt)
++
++    def norm(n):
++        return (torch.rand(n, device=dev, generator=g) + 0.5).to(dt)
++
++    shapes = {"qkv": (q + 2 * kv, D), "o": (D, q), "gate_up": (2 * inter, D), "down": (D, inter)}
++    base = {"model.embed_tokens.weight": w(vocab, D), "model.norm.weight": norm(D),
++            "lm_head.weight": w(vocab, D)}
++    ft = {}
++    for i in range(layers):
++        p = f"model.layers.{i}."
++        for key, rel in fam.layer_weights.items():
++            base[p + rel] = w(*shapes[key]) if key in shapes else norm(D if key in ("in_ln", "post_ln") else Hd)
++        pre = f"base_model.model.model.layers.{i}.self_attn."
++        for proj, out, inp in [("q", q, D), ("k", kv, D), ("v", kv, D), ("o", D, q)]:
++            ft[pre + f"{proj}_proj.lora_A.weight"] = (torch.randn(r, inp, device=dev) * 0.02).to(dt)
++            ft[pre + f"{proj}_proj.lora_B.weight"] = torch.zeros(out, r, device=dev, dtype=dt)
++    meta = dict(hidden_size=D, num_hidden_layers=layers, num_attention_heads=Hq,
++                num_key_value_heads=Hkv, head_dim=Hd, intermediate_size=inter, rope_theta=1e6,
++                rms_norm_eps=1e-6, lora_scaling=2.0, vocab_size=vocab, learning_rate=1e-4,
++                weight_decay=0.0, gamma=1.0, backward_fp32=False, lm_head_key="lm_head.weight",
++                norm_weight_key="model.norm.weight", embed_weight_key="model.embed_tokens.weight",
++                save_attn_qkv=True, save_attn_ctx=True, save_resid_mid=True,
++                max_saved_finetuning_tokens=s_max, backward_run_ahead_boundaries=run_ahead,
++                backward_tf32=tf32, backward_attn_sdpa=sdpa)
++    svc = Qwen3BackwardService(0)
++    svc.shared = {"base": base, "ft": ft, "meta": meta}
++    svc._build_state()
++    svc._built = True
++    acts = {
++        "layer_in": [w(s_max, D) for _ in range(layers)],
++        "mlp_gate_up": [w(s_max, 2 * inter) for _ in range(layers)],
++        "attn_qh": [w(s_max, q) for _ in range(layers)],
++        "attn_kh": [w(s_max, kv) for _ in range(layers)],
++        "attn_vh": [w(s_max, kv) for _ in range(layers)],
++        "attn_ctx": [w(s_max, q) for _ in range(layers)],
++        "resid_mid": [w(s_max, D) for _ in range(layers)],
++        "final_in": w(s_max, D), "final_hidden": w(s_max, D),
++        "concat_input_ids": torch.randint(0, vocab, (s_max,), device=dev),
++    }
++    return svc, acts
++
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--layers", type=int, default=8)
++    ap.add_argument("--lens", default="2400x6,600x2")
++    ap.add_argument("--run-ahead", type=int, default=2)
++    ap.add_argument("--iters", type=int, default=3)
++    ap.add_argument("--trace", default="")
++    ap.add_argument("--top", type=int, default=25)
++    ap.add_argument("--tf32", action="store_true", help="meta backward_tf32: fp32 matmuls (head, attention scores) on TF32")
++    ap.add_argument("--sdpa", action="store_true", help="meta backward_attn_sdpa: fused SDPA attention backward")
++    ap.add_argument("--no-profile", action="store_true")
++    a = ap.parse_args()
++    lens = [int(x.split("x")[0]) for x in a.lens.split(",") for _ in range(int(x.split("x")[1]))]
++    n = sum(lens)
++    dev, dt = "cuda", torch.bfloat16
++    svc, acts = build(a.layers, a.run_ahead, n, dev, dt, tf32=a.tf32, sdpa=a.sdpa)   # the trainer sets TF32 from meta
++
++    def cycle():
++        svc.process_backward(acts, lens, n, 0)
++
++    cycle()
++    torch.cuda.synchronize()
++    ts = []
++    for _ in range(a.iters):
++        t = time.time()
++        cycle()
++        torch.cuda.synchronize()
++        ts.append(time.time() - t)
++    per = min(ts)
++    print(f"{n} tokens ({len(lens)} samples), {a.layers} layers, run-ahead {a.run_ahead}: "
++          f"{per * 1e3:.0f} ms/cycle (tf32 {a.tf32}, sdpa {a.sdpa})")
++    if a.no_profile:
++        return
++    from torch.profiler import ProfilerActivity, profile
++    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
++        cycle()
++        torch.cuda.synchronize()
++    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=a.top, max_name_column_width=60))
++    print(prof.key_averages(group_by_input_shape=True).table(sort_by="cuda_time_total", row_limit=a.top,
++                                                            max_name_column_width=30, max_shapes_column_width=90))
++    if a.trace:
++        prof.export_chrome_trace(a.trace)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/eval-tp/tf32_check.py b/eval-tp/tf32_check.py
+new file mode 100644
+index 0000000..1650d36
+--- /dev/null
++++ b/eval-tp/tf32_check.py
+@@ -0,0 +1,23 @@
++# fp32 vs TF32 backward: loss and every LoRA grad, same weights/activations (production shape, 4 layers)
++import sys, torch
++sys.path.insert(0, "/mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM/eval-tp")
++import profile_backward as P
++lens = [2400] * 6 + [600] * 2; n = sum(lens)
++out = {}
++import os
++MODE = os.environ.get("MODE", "tf32")   # tf32 | sdpa | both: the variant compared with strict fp32
++for tf in (False, False, True):
++    torch.backends.cuda.matmul.allow_tf32 = False
++    svc, acts = P.build(4, 2, n, "cuda", torch.bfloat16, tf32=tf and MODE in ("tf32", "both"),
++                        sdpa=tf and MODE in ("sdpa", "both"))
++    loss, nv = svc.process_backward(acts, lens, n, 0)
++    torch.cuda.synchronize()
++    grads = {f"{i}.{p}.{k}": t.grad.detach().clone() for i, ld in svc.lora.items() for p, d in ld.items() for k, t in d.items()}
++    out.setdefault(tf, []).append((float(loss), grads))
++(l0, g0), (lr, gr) = out[False]; (l1, g1), = out[True]
++print("fp32 rerun determinism: loss diff", abs(lr - l0), "max grad diff", max((gr[k] - g0[k]).abs().max().item() for k in g0))
++print(f"[{MODE}] loss fp32 {l0:.6f} variant {l1:.6f} rel diff {abs(l1 - l0) / abs(l0):.2e}")
++g0 = {k: v for k, v in g0.items() if k.endswith(".B")}
++rel = sorted(((g1[k] - g0[k]).norm() / (g0[k].norm() + 1e-30)).item() for k in g0)
++cos = sorted(torch.nn.functional.cosine_similarity(g1[k].flatten(), g0[k].flatten(), dim=0).item() for k in g0)
++print(f"{len(rel)} LoRA grads: rel-L2 diff median {rel[len(rel)//2]:.2e} max {rel[-1]:.2e}; cosine min {cos[0]:.6f}")
 diff --git a/scripts/init_qwen3_32b_baseline_adapter.py b/scripts/init_qwen3_32b_baseline_adapter.py
 new file mode 100644
 index 0000000..c1fcef3
@@ -3516,6 +4530,93 @@ index 0000000..661c7e9
 +            cond("rank 0 wrote the TP=2 adapter", False)
 +    print(f"\n{PASS} passed, {FAIL} failed")
 +    sys.exit(1 if FAIL else 0)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_attn_sdpa.py b/tests/test_attn_sdpa.py
+new file mode 100644
+index 0000000..b001fab
+--- /dev/null
++++ b/tests/test_attn_sdpa.py
+@@ -0,0 +1,81 @@
++#!/usr/bin/env python
++"""backward_attn_sdpa: the fused SDPA attention backward == the fp32 per-sample core.
++
++GPU. Packed batches of several causal samples with GQA (Hq=16, Hkv=2, Hd=128, the
++Qwen3-32B TP=4 shard), bf16 inputs. The SDPA path runs bf16 q/k/v through the flash
++kernel (fp32 accumulate), so it is compared with the fp32 core at bf16-level tolerance
++(relative L2 per gradient), plus exact layout checks: per-sample isolation (a sample's
++gradient does not depend on its neighbours) and the persistent-buffer path.
++
++    python tests/test_attn_sdpa.py
++"""
++import torch
++
++from vllm.deltaserve.bwd_services.common import attention as A
++
++PASS = FAIL = 0
++
++
++def check(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name} {detail}")
++
++
++def rel(a, b):
++    return ((a.float() - b.float()).norm() / (b.float().norm() + 1e-30)).item()
++
++
++def run(seq_lens, Hq=16, Hkv=2, Hd=128, seed=0):
++    torch.manual_seed(seed)
++    n = sum(seq_lens)
++    b_start = [sum(seq_lens[:i]) for i in range(len(seq_lens))]
++    dims = (Hq, Hkv, Hd, Hkv * Hd)
++    qh = torch.randn(n, Hq, Hd, device="cuda", dtype=torch.bfloat16)
++    kh = torch.randn(n, Hkv, Hd, device="cuda", dtype=torch.bfloat16)
++    vh = torch.randn(n, Hkv, Hd, device="cuda", dtype=torch.bfloat16)
++    g = torch.randn(n, Hq * Hd, device="cuda", dtype=torch.bfloat16)
++    A.set_sdpa(False)
++    ref = A.attn_backward_core(qh, kh, vh, g.view(n, Hq, Hd), seq_lens, b_start, dims,
++                               cdt=torch.float32)
++    A.set_sdpa(True)
++    got = A.attn_backward_core(qh, kh, vh, g.view(n, Hq, Hd), seq_lens, b_start, dims,
++                               cdt=torch.float32)
++    A.set_sdpa(False)
++    return ref, got, (qh, kh, vh, g, b_start, dims)
++
++
++def main():
++    print("SDPA vs fp32 core:")
++    for lens in ([64], [600, 2400], [2400] * 3 + [600, 17], [1, 5, 300]):
++        ref, got, _ = run(lens)
++        for name, r, x in zip(("dq", "dk", "dv"), ref, got):
++            e = rel(x, r)
++            check(f"lens {lens} {name}", e < 2e-2, f"rel-L2 {e:.2e}")
++    print("per-sample isolation (sample 1 of a batch == the same sample alone):")
++    _, got_b, (qh, kh, vh, g, _, dims) = run([300, 500])
++    A.set_sdpa(True)
++    s1 = slice(300, 800)
++    alone = A.attn_backward_core(qh[s1], kh[s1], vh[s1], g[s1].view(500, *qh.shape[1:]), [500], [0],
++                                 dims, cdt=torch.float32)
++    A.set_sdpa(False)
++    for name, a1, b1 in zip(("dq", "dk", "dv"), alone, got_b):
++        check(f"{name}", rel(b1[s1], a1) < 1e-6)
++    print("persistent-buffer path:")
++    _, got, (qh, kh, vh, g, b_start, dims) = run([200, 300])
++    n = qh.shape[0]
++    bufs = [torch.full((n + 7, *t.shape[1:]), 9.0, device="cuda") for t in (qh, kh, vh)]
++    A.set_sdpa(True)
++    out = A.attn_backward_core(qh, kh, vh, g.view(n, *qh.shape[1:]), [200, 300], b_start, dims,
++                               cdt=torch.float32, grad_qh_buf=bufs[0], grad_kh_buf=bufs[1],
++                               grad_vh_buf=bufs[2])
++    A.set_sdpa(False)
++    for name, a, b, buf in zip(("dq", "dk", "dv"), out, got, bufs):
++        check(f"{name} view into the buffer", a.data_ptr() == buf.data_ptr() and torch.equal(a, b))
++    print(f"\n{PASS} passed, {FAIL} failed")
++    raise SystemExit(1 if FAIL else 0)
 +
 +
 +if __name__ == "__main__":
@@ -3926,6 +5027,96 @@ index 0000000..f046330
 +    ap.add_argument("--tokenizer", default="/mnt/weka/home/jianshu.she/scratch/Qwen3-32B")
 +    a = ap.parse_args()
 +    sys.exit(0 if main(AutoTokenizer.from_pretrained(a.tokenizer)) else 1)
+diff --git a/tests/test_ft_save_op.py b/tests/test_ft_save_op.py
+index 2bcd9ac..29ba687 100644
+--- a/tests/test_ft_save_op.py
++++ b/tests/test_ft_save_op.py
+@@ -268,6 +268,78 @@ def test_accumulator_op_path_matches_hooks():
+     C.check("second step keeps rows 4..8 from step 1", acc.layer_in[1][4:9].float(), ref.layer_in[1][4:9].float())
+ 
+ 
++def test_capture_rows_capped():
++    """A has_ft capture gathers op_capture_rows rows (not max_saved), the
++    uncaptured path gathers the step's own n — both save the same rows as the
++    hooks, including n > op_capture_rows on the uncaptured path."""
++    print("test_capture_rows_capped (capture gathers graph_ft_max_tokens rows, uncaptured n):")
++    torch.manual_seed(1)
++    model = _Top().to(DEV).to(torch.bfloat16)
++    n_tok = 24
++    x = torch.randn(n_tok, D, device=DEV, dtype=torch.bfloat16)
++    kw = dict(intermediate_size=INTER, q_size=HQ * HD, kv_size=HKV * HD, save_attn_qkv=True,
++              save_attn_ctx=True, save_resid_mid=True, attn_qkv_pre_transform=False)
++
++    def hooks_ref(pos, offset):
++        ref = FinetuneAccumulator(model, S_MAX, D, DEV, torch.bfloat16, **kw)
++        ref.register_hooks()
++        mask = np.zeros(n_tok, dtype=bool); mask[pos] = True
++        with override_forward_context(_ctx(None)):
++            ref.begin_step(torch.from_numpy(mask).to(DEV), len(pos), offset=offset,
++                           contiguous=False)
++            model(x)
++            ref.end_step()
++        for h in ref._handles:
++            h.remove()
++        torch.cuda.synchronize()
++        return ref
++
++    acc = FinetuneAccumulator(model, S_MAX, D, DEV, torch.bfloat16, **kw)
++    acc.install_save_points(model)
++    acc.op_capture_rows = 4
++    C.ok("capture_state() uses op_capture_rows", acc.capture_state().rows == 4)
++    s = torch.cuda.Stream()
++    with torch.cuda.stream(s):
++        with override_forward_context(_ctx(acc.capture_state())):
++            for _ in range(2):
++                model(x)
++            g = torch.cuda.CUDAGraph()
++            with torch.cuda.graph(g, stream=s):
++                model(x)
++    torch.cuda.synchronize()
++    pos = [3, 8, 19]  # 3 <= 4 captured rows
++    ref = hooks_ref(pos, 2)
++    with torch.cuda.stream(s):
++        st = acc.arm_op_step(np.array(pos), len(pos), 2)
++        C.ok("arm_op_step returns the step's row count", st.rows == 3)
++        with override_forward_context(_ctx(st)):
++            g.replay()
++    torch.cuda.synchronize()
++    for i in range(NL):
++        C.check(f"replay, capped capture: layer_in[{i}]", acc.layer_in[i][:S_MAX].float(),
++                ref.layer_in[i][:S_MAX].float())
++        C.check(f"replay, capped capture: gate_up[{i}]", acc.mlp_gate_up[i][:S_MAX].float(),
++                ref.mlp_gate_up[i][:S_MAX].float())
++    C.check("replay, capped capture: final_in", acc.final_in[:S_MAX].float(), ref.final_in[:S_MAX].float())
++
++    # Uncaptured (compiled, no graph) step with more FT rows than a graph carries.
++    acc2 = FinetuneAccumulator(model, S_MAX, D, DEV, torch.bfloat16, **kw)
++    acc2.install_save_points(model)
++    acc2.op_capture_rows = 4
++    pos = [0, 4, 5, 9, 13, 21, 23]
++    ref = hooks_ref(pos, 6)
++    st = acc2.arm_op_step(np.array(pos), len(pos), 6)
++    with override_forward_context(_ctx(st)):
++        model(x)
++    torch.cuda.synchronize()
++    for i in range(NL):
++        C.check(f"uncaptured, n=7 > 4: layer_in[{i}]", acc2.layer_in[i][:S_MAX].float(),
++                ref.layer_in[i][:S_MAX].float())
++        C.check(f"uncaptured, n=7 > 4: ctx[{i}]", acc2.attn_ctx[i][:S_MAX].float(),
++                ref.attn_ctx[i][:S_MAX].float())
++    C.check("uncaptured: final_in", acc2.final_in[:S_MAX].float(), ref.final_in[:S_MAX].float())
++
++
+ def test_accumulate_final_padded():
+     """The post-forward final_hidden / ids save on a graph-PADDED output with
+     an interleaved (mask-path) FT layout — the nutanix crash of 2026-09-15."""
+@@ -292,5 +364,6 @@ def test_accumulate_final_padded():
+ if __name__ == "__main__":
+     test_capture_follows_index_contents()
+     test_accumulator_op_path_matches_hooks()
++    test_capture_rows_capped()
+     test_accumulate_final_padded()
+     C.finish()
 diff --git a/tests/test_ft_scheduler_idle_throttle.py b/tests/test_ft_scheduler_idle_throttle.py
 new file mode 100644
 index 0000000..351c041
@@ -4035,6 +5226,126 @@ index 0000000..351c041
 +
 +if __name__ == "__main__":
 +    unittest.main()
+diff --git a/tests/test_ft_stall_gate.py b/tests/test_ft_stall_gate.py
+new file mode 100644
+index 0000000..6ad2788
+--- /dev/null
++++ b/tests/test_ft_stall_gate.py
+@@ -0,0 +1,114 @@
++"""Average-TBT gate (slo.ft_decode_stall_budget) in FinetuneScheduler.admit_ft_to_step.
++
++CPU only. A stub estimator predicts a decode step at 10 ms and adds 0.1 ms per FT
++token, so one 500-token sample on a decode step stalls the decodes 50 ms. With a
++0.1 budget over a 1 s window FT may add 100 ms of stall per second: two such
++steps are admitted, the third waits until the window slides. Budget 0 is the old
++behaviour (no gate); prefill-only and idle steps (no decodes) are never gated.
++
++    python tests/test_ft_stall_gate.py
++"""
++
++from types import SimpleNamespace
++import unittest
++from unittest.mock import patch
++
++from vllm.config.finetune import FinetuneConfig
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++from vllm.deltaserve.estimator import StepFeatures
++from vllm.deltaserve.ft_scheduler import FinetuneScheduler
++
++
++class _Store:
++    def __init__(self, n, length=500):
++        self.pool = [SimpleNamespace(input_len=length, request_id=f"s{i}") for i in range(n)]
++        self.current_epoch, self.total_epochs = 0, 1
++
++    def has_next(self):
++        return bool(self.pool)
++
++    def advance_epoch(self):
++        return False
++
++    def pop_next(self, exclude=()):
++        ids = {id(s) for s in exclude}
++        return next((s for s in self.pool if id(s) not in ids), None)
++
++    def claim(self, samples):
++        ids = {id(s) for s in samples}
++        self.pool = [s for s in self.pool if id(s) not in ids]
++
++
++class _Est:
++    is_ready = True
++
++    def predict(self, f, regime=None, apply_margin=True):
++        return 0.01 + 1e-4 * f.t_ft
++
++
++def make(budget, window=1.0, b_d=4, t_in=0):
++    s = object.__new__(FinetuneScheduler)
++    cfg = FinetuneConfig(enable_finetuning=True, coserving_admission_phase="both",
++                         max_tbt_slo=0.2, decode_only_ft_safety_margin=1.0,
++                         ft_decode_stall_budget=budget, ft_stall_window_s=window)
++    s.vllm_config = SimpleNamespace(finetune_config=cfg)
++    coord = FinetuneCoordinator(16384)
++    coord.ft_started = True
++    s._coord = coord
++    s._ft_injector = SimpleNamespace(store=_Store(50), _make_request=lambda smp: smp)
++    s._estimator = _Est()
++    s._admit_trace = None
++    s._async = False
++    s._last_step_pred_s = 0.0
++    s._ttft_slo, s._max_tbt_slo = 0.5, 0.2
++    s._stall_budget, s._stall_window = budget, window
++    from collections import deque
++    s._stalls = deque()
++    s.max_num_scheduled_tokens = 16384
++    s._unspent_prefill = 0
++    s._profiling_mode = False
++    feats = StepFeatures(t_in=t_in, p=1 if t_in else 0, b_d=b_d, k=4000.0,
++                         prefill_lens=[t_in] if t_in else None)
++    s._current_step_features = lambda: (feats, None)
++    return s
++
++
++def admit(s, at):
++    with patch("vllm.deltaserve.ft_scheduler.time.time", return_value=at):
++        n, _ = s.admit_ft_to_step()
++    s._coord.fill_count = 0  # the test only exercises admission, not the buffer
++    return n
++
++
++class StallGateTest(unittest.TestCase):
++    def test_budget_limits_stall_per_window(self):
++        s = make(budget=0.1)
++        # Step 1 admits two samples (100 ms of stall, the whole budget); step 2,
++        # 10 ms later, admits nothing.
++        self.assertEqual(admit(s, 100.0), 1000)
++        self.assertAlmostEqual(sum(x for _, x in s._stalls), 0.1)
++        self.assertEqual(admit(s, 100.01), 0, "budget spent")
++        # The window slides: 1.5 s later FT is admitted again.
++        self.assertEqual(admit(s, 101.5), 1000)
++
++    def test_zero_budget_is_ungated(self):
++        s = make(budget=0.0)
++        got = [admit(s, 100.0 + 0.01 * i) for i in range(5)]
++        self.assertTrue(all(n > 0 for n in got))
++        self.assertEqual(len(s._stalls), 0)
++
++    def test_no_decodes_not_gated(self):
++        s = make(budget=0.01, b_d=0, t_in=300)
++        # A 10 ms budget would stop at the first sample on a decode step; with no
++        # decodes the step fills the token budget and records no stall.
++        self.assertEqual(admit(s, 100.0), 16000)
++        self.assertEqual(len(s._stalls), 0)
++
++    def test_single_step_bounded_by_budget(self):
++        # 0.1 * 1 s = 100 ms: at most two 500-token samples (50 ms each) in one step.
++        s = make(budget=0.1)
++        self.assertEqual(admit(s, 100.0), 1000)
++
++
++if __name__ == "__main__":
++    unittest.main(verbosity=2)
 diff --git a/tests/test_fwd_token_throttle.py b/tests/test_fwd_token_throttle.py
 new file mode 100644
 index 0000000..63d31f7

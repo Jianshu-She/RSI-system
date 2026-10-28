@@ -1,0 +1,86 @@
+# DeltaServe config for TRAINING ONLY on an existing RSI-system SFT file (scripts/run_train.sh fills the __PLACEHOLDERS__).
+# Same recipe as coserve_e2e.yaml, but the corpus is given at launch and FT starts immediately; no inference traffic. Qwen3-32B with the YaRN x4 config (the ACE benchmark's MODEL_DIR), TP=4 H200.
+finetune:
+  step_trace_path: /mnt/weka/home/jianshu.she/.cache/rsi-push/RSI-system/deltaserve/work/runs/rsimix/cofix_r1/step_trace.csv
+  pause_min_prefill_tokens: 4096
+  enable_finetuning: true
+  start_on_launch: false             # opened by POST /start_finetuning right after launch
+  data_path: /mnt/weka/home/jianshu.she/.cache/rsi-push/RSI-system/deltaserve/work/runs/rsimix/cofix_r1/rounds/r0.jsonl                # RSI-system chat JSONL, e.g. $ACE_SFT_DIR/data_v2/formula.jsonl
+  chat_loss_on: ace                  # render rows exactly like the ACE LoRA trainer (thinking off, loss on assistant tokens)
+  chat_thinking: "off"
+  finetuning_lora_path: /mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM/adapters/qwen3-32b-qkvo-r16-initial   # q,k,v,o LoRA r16 alpha32, zero-B init (scripts/init_lora_adapter.py)
+  adapter_save_dir: /mnt/weka/home/jianshu.she/.cache/rsi-push/RSI-system/deltaserve/work/runs/rsimix/cofix_r1/adapters     # PEFT exports: cycle<N>/, latest/, final/ (after num_epochs)
+  adapter_save_every: 20
+  bwd_log_path: /mnt/weka/home/jianshu.she/.cache/rsi-push/RSI-system/deltaserve/work/runs/rsimix/cofix_r1/bwd.csv          # one CSV row per backward cycle (loss, tokens)
+  num_epochs: 1
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  gamma: 1.0                         # constant LR
+  max_saved_finetuning_tokens: 16384 # activation buffer (tokens) — also the longest trainable sample
+  backward_batch_tokens: 16384       # tokens per backward/optimizer step
+  backward_cuda_graph: true
+  backward_cuda_graph_max_tokens: 512
+  backward_cuda_graph_attn_bn_max: 28
+  backward_cuda_graph_attn_l_max: 64
+  save_attn_qkv: true
+  save_attn_ctx: true
+  save_resid_mid: true
+  backward_fp32: false
+  backward_mps_percentage: 0
+  backward_run_ahead_boundaries: 2
+  graph_ft_batches: true
+  graph_ft_max_tokens: 512
+  forward_interruptible: true
+  ft_only_admission_grace_ms: 2.0
+  rps_throttle_enable: false
+  rps_throttle_close_rps: 5.0
+  rps_throttle_open_rps: 2.0
+  rps_throttle_window_s: 0.1
+  rps_throttle_close_time: 1.0
+  fwd_token_throttle_enable: false   # standard co-serving: the backward yields to prefills only. A 0-token throttle
+  fwd_token_throttle: 0              #   (pause on ANY inference step) would starve training under continuous decode.
+  pause_prefill_always: false
+slo:
+  ft_decode_stall_budget: 0.3
+  ft_stall_window_s: 2.0
+  coserving_admission_phase: both
+  ttft_slo: 0.5
+  avg_tbt_slo: 0.02
+  max_tbt_slo: 0.2
+  profile_on_launch: true
+  profile_num_repeats: 2
+  ft_tokens_admission_constrain_factor: -1
+  match_prefill_workload_factor: 0
+  decode_only_ft_safety_margin: 1.0
+debug:
+  print_weight_hash: false
+  print_activation_hash: false
+  print_scheduler_add: false
+  print_engine_batch_exec: false
+  print_engine_batch_done: false
+  print_engine_req_recv: false
+adapters:
+  lora_path_0: /mnt/weka/home/jianshu.she/deltaserve/DeltaServe-vLLM/adapters/qwen3-32b-qkvo-r16-initial
+lora:
+  enable_lora: true
+  max_loras: 2
+  max_lora_rank: 16
+server:
+  host: 127.0.0.1
+  port: 8100
+  api_server_count: 1
+model:
+  model: /mnt/weka/home/jianshu.she/RSI-system/benchmark/ACE/models/Qwen3-32B-yarn131k
+  tokenizer_mode: auto
+  trust_remote_code: false
+  dtype: bfloat16
+  max_model_len: 40960               # ACE prompts with the learned playbook are ~30.5K tokens (shared prefix, prefix-cached)
+engine:
+  gpu_memory_utilization: 0.42       # vLLM's budget EXCLUDES the FT activation buffers (~58 GB/GPU at 16K) + backward child
+  enforce_eager: false
+  disable_log_stats: true
+  seed: 0
+  max_num_batched_tokens: 16384      # an FT sample prefills in one step, so the step budget holds the longest sample
+  long_prefill_token_threshold: 2048 # ...while inference prefills stay chunked (FT requests are exempt)
+parallel:
+  tensor_parallel_size: 4

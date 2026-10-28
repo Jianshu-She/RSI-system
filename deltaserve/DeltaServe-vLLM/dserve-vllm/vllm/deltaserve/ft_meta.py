@@ -154,6 +154,8 @@ def build_backward_meta(hf_config: Any, ft_cfg: Any, *, lm_head_key: str | None,
         "weight_decay": float(ft_cfg.weight_decay),
         "gamma": float(ft_cfg.gamma),
         "backward_fp32": bool(ft_cfg.backward_fp32),
+        "backward_tf32": bool(getattr(ft_cfg, "backward_tf32", False)),
+        "backward_attn_sdpa": bool(getattr(ft_cfg, "backward_attn_sdpa", False)),
         # CUDA-graph backward (Phase 5): bn_max/l_max bound the padded-attention
         # region; s_max comes from max_saved_finetuning_tokens (the same value
         # sizes the activation buffers, so graphs and the pool are aligned).

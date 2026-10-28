@@ -1,0 +1,72 @@
+# torchtune 0.6.1 (lora_finetune_distributed, FSDP over the serving GPUs) for rsi_mix.sh's vLLM + torchtune cell.
+# Same LoRA recipe as DeltaServe's train_only.yaml: q,k,v,o rank 16 / alpha 32, AdamW lr 1e-4, no weight decay,
+# constant lr, bf16, the same rendered + masked samples. torchtune holds its own (sharded) copy of the weights.
+model_dir: ???
+output_dir: ???
+rounds_dir: ???
+rounds: 4
+
+model:
+  _component_: lms_tune.lora_qwen3_from_hf_config
+  model_dir: ${model_dir}
+  max_seq_len: 4096
+  lora_attn_modules: ['q_proj', 'k_proj', 'v_proj', 'output_proj']
+  apply_lora_to_mlp: False
+  apply_lora_to_output: False
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.0
+
+tokenizer:                # only used by the recipe for the padding id
+  _component_: torchtune.models.qwen2_5.qwen2_5_tokenizer
+  path: ${model_dir}/vocab.json
+  merges_file: ${model_dir}/merges.txt
+  max_seq_len: null
+
+checkpointer:
+  _component_: lms_tune.Qwen3HFCheckpointer
+  checkpoint_dir: ${model_dir}
+  checkpoint_files: ???
+  recipe_checkpoint: null
+  output_dir: ${output_dir}/checkpoints
+  model_type: QWEN2
+resume_from_checkpoint: False
+save_adapter_weights_only: True
+
+dataset:
+  _component_: tt_rsi.rounds_dataset
+  path: ${rounds_dir}
+  rounds: ${rounds}
+seed: 0
+shuffle: False
+batch_size: 1
+collate_fn: lms_tune.data.distributed_collate
+
+optimizer:
+  _component_: torch.optim.AdamW
+  fused: True
+  weight_decay: 0.0
+  lr: 1e-4
+lr_scheduler:
+  _component_: torchtune.training.lr_schedulers.get_cosine_schedule_with_warmup
+  num_warmup_steps: 0
+  num_cycles: 0.0         # cos(0) = 1 for every step: constant lr
+loss:
+  _component_: torchtune.modules.loss.CEWithChunkedOutputLoss
+
+epochs: 1
+max_steps_per_epoch: null
+gradient_accumulation_steps: 1
+clip_grad_norm: null
+compile: False
+
+metric_logger:
+  _component_: tt_rsi.ProgressLogger
+  log_dir: ${output_dir}
+log_every_n_steps: 1
+log_peak_memory_stats: False
+
+device: cuda
+dtype: bf16
+enable_activation_checkpointing: True    # finer samples are ~2.5K tokens; without it a 32B layer stack does not fit next to vLLM
+enable_activation_offloading: False

@@ -268,6 +268,78 @@ def test_accumulator_op_path_matches_hooks():
     C.check("second step keeps rows 4..8 from step 1", acc.layer_in[1][4:9].float(), ref.layer_in[1][4:9].float())
 
 
+def test_capture_rows_capped():
+    """A has_ft capture gathers op_capture_rows rows (not max_saved), the
+    uncaptured path gathers the step's own n — both save the same rows as the
+    hooks, including n > op_capture_rows on the uncaptured path."""
+    print("test_capture_rows_capped (capture gathers graph_ft_max_tokens rows, uncaptured n):")
+    torch.manual_seed(1)
+    model = _Top().to(DEV).to(torch.bfloat16)
+    n_tok = 24
+    x = torch.randn(n_tok, D, device=DEV, dtype=torch.bfloat16)
+    kw = dict(intermediate_size=INTER, q_size=HQ * HD, kv_size=HKV * HD, save_attn_qkv=True,
+              save_attn_ctx=True, save_resid_mid=True, attn_qkv_pre_transform=False)
+
+    def hooks_ref(pos, offset):
+        ref = FinetuneAccumulator(model, S_MAX, D, DEV, torch.bfloat16, **kw)
+        ref.register_hooks()
+        mask = np.zeros(n_tok, dtype=bool); mask[pos] = True
+        with override_forward_context(_ctx(None)):
+            ref.begin_step(torch.from_numpy(mask).to(DEV), len(pos), offset=offset,
+                           contiguous=False)
+            model(x)
+            ref.end_step()
+        for h in ref._handles:
+            h.remove()
+        torch.cuda.synchronize()
+        return ref
+
+    acc = FinetuneAccumulator(model, S_MAX, D, DEV, torch.bfloat16, **kw)
+    acc.install_save_points(model)
+    acc.op_capture_rows = 4
+    C.ok("capture_state() uses op_capture_rows", acc.capture_state().rows == 4)
+    s = torch.cuda.Stream()
+    with torch.cuda.stream(s):
+        with override_forward_context(_ctx(acc.capture_state())):
+            for _ in range(2):
+                model(x)
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g, stream=s):
+                model(x)
+    torch.cuda.synchronize()
+    pos = [3, 8, 19]  # 3 <= 4 captured rows
+    ref = hooks_ref(pos, 2)
+    with torch.cuda.stream(s):
+        st = acc.arm_op_step(np.array(pos), len(pos), 2)
+        C.ok("arm_op_step returns the step's row count", st.rows == 3)
+        with override_forward_context(_ctx(st)):
+            g.replay()
+    torch.cuda.synchronize()
+    for i in range(NL):
+        C.check(f"replay, capped capture: layer_in[{i}]", acc.layer_in[i][:S_MAX].float(),
+                ref.layer_in[i][:S_MAX].float())
+        C.check(f"replay, capped capture: gate_up[{i}]", acc.mlp_gate_up[i][:S_MAX].float(),
+                ref.mlp_gate_up[i][:S_MAX].float())
+    C.check("replay, capped capture: final_in", acc.final_in[:S_MAX].float(), ref.final_in[:S_MAX].float())
+
+    # Uncaptured (compiled, no graph) step with more FT rows than a graph carries.
+    acc2 = FinetuneAccumulator(model, S_MAX, D, DEV, torch.bfloat16, **kw)
+    acc2.install_save_points(model)
+    acc2.op_capture_rows = 4
+    pos = [0, 4, 5, 9, 13, 21, 23]
+    ref = hooks_ref(pos, 6)
+    st = acc2.arm_op_step(np.array(pos), len(pos), 6)
+    with override_forward_context(_ctx(st)):
+        model(x)
+    torch.cuda.synchronize()
+    for i in range(NL):
+        C.check(f"uncaptured, n=7 > 4: layer_in[{i}]", acc2.layer_in[i][:S_MAX].float(),
+                ref.layer_in[i][:S_MAX].float())
+        C.check(f"uncaptured, n=7 > 4: ctx[{i}]", acc2.attn_ctx[i][:S_MAX].float(),
+                ref.attn_ctx[i][:S_MAX].float())
+    C.check("uncaptured: final_in", acc2.final_in[:S_MAX].float(), ref.final_in[:S_MAX].float())
+
+
 def test_accumulate_final_padded():
     """The post-forward final_hidden / ids save on a graph-PADDED output with
     an interleaved (mask-path) FT layout — the nutanix crash of 2026-09-15."""
@@ -292,5 +364,6 @@ def test_accumulate_final_padded():
 if __name__ == "__main__":
     test_capture_follows_index_contents()
     test_accumulator_op_path_matches_hooks()
+    test_capture_rows_capped()
     test_accumulate_final_padded()
     C.finish()

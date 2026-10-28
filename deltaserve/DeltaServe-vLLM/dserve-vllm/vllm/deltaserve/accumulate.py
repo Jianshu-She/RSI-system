@@ -265,6 +265,9 @@ class FinetuneAccumulator:
                                     pin_memory=(torch.device(device).type == "cuda"))
         self._idx_pin_pos = 0
         self.op_bufs: list = []
+        # Rows a captured has_ft graph gathers per save: the most FT tokens such
+        # a step can carry. The runner lowers it to graph_ft_max_tokens.
+        self.op_capture_rows = self.max_saved
         self.op_ready = False
         self._op_marker = None
 
@@ -358,13 +361,16 @@ class FinetuneAccumulator:
                f"(+ final norm) — mixed FT batches may replay CUDA graphs")
         return True
 
-    def capture_state(self):
+    def capture_state(self, rows: int | None = None):
         """The ``ft_save`` context value for capturing / running a has_ft
         graph: the persistent index tensors as they are (scratch-pointing
-        at capture) and the slot table."""
+        at capture) and the slot table. A capture gathers
+        ``op_capture_rows`` rows; ``arm_op_step`` passes the step's own
+        count for the uncaptured path (a replay never runs this Python)."""
         from vllm.deltaserve.ft_save_op import FtSaveState
 
-        return FtSaveState(src=self.ft_src, dst=self.ft_dst, bufs=self.op_bufs)
+        return FtSaveState(src=self.ft_src, dst=self.ft_dst, bufs=self.op_bufs,
+                           rows=self.op_capture_rows if rows is None else rows)
 
     def arm_op_step(self, positions, num_ft: int, offset: int):
         """Refresh the index tensors for this step: ``positions`` are the FT
@@ -384,7 +390,7 @@ class FinetuneAccumulator:
             stage[1, :n] = torch.arange(offset, offset + n, dtype=torch.int64)
         self.ft_src.copy_(stage[0], non_blocking=True)
         self.ft_dst.copy_(stage[1], non_blocking=True)
-        return self.capture_state()
+        return self.capture_state(rows=max(n, 0))
 
     def register_hooks(self) -> None:
         for layer, mod in self._layer_in_modules.items():

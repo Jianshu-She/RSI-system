@@ -1,0 +1,71 @@
+{
+ "mode": "seq",
+ "t_start": 1793200982.7839146,
+ "rounds": [
+  {
+   "k": 0,
+   "tokens": 229142,
+   "target_cum": 229142,
+   "t_trigger": 1793201102.7849736,
+   "t_drained": 1793201104.9174705,
+   "t_ft_start": 1793201104.9546676,
+   "t_done": 1793201146.0525577
+  },
+  {
+   "k": 1,
+   "tokens": 231080,
+   "target_cum": 460222,
+   "t_trigger": 1793201252.7845175,
+   "t_drained": 1793201254.7619605,
+   "ingest": {
+    "added": 172,
+    "tokens": 231080,
+    "skipped_no_target": 0,
+    "skipped_too_long": 0,
+    "corpus_samples": 344,
+    "corpus_tokens": 460222,
+    "epoch": 0
+   },
+   "t_ft_start": 1793201255.1698122,
+   "t_done": 1793201294.3473215
+  },
+  {
+   "k": 2,
+   "tokens": 231281,
+   "target_cum": 691503,
+   "t_trigger": 1793201402.7847333,
+   "t_drained": 1793201404.7102396,
+   "ingest": {
+    "added": 172,
+    "tokens": 231281,
+    "skipped_no_target": 0,
+    "skipped_too_long": 0,
+    "corpus_samples": 516,
+    "corpus_tokens": 691503,
+    "epoch": 0
+   },
+   "t_ft_start": 1793201405.0969691,
+   "t_done": 1793201444.8841465
+  },
+  {
+   "k": 3,
+   "tokens": 231666,
+   "target_cum": 923169,
+   "t_trigger": 1793201552.787121,
+   "t_drained": 1793201552.7871451,
+   "ingest": {
+    "added": 172,
+    "tokens": 231666,
+    "skipped_no_target": 0,
+    "skipped_too_long": 0,
+    "corpus_samples": 688,
+    "corpus_tokens": 923169,
+    "epoch": 0
+   },
+   "t_ft_start": 1793201553.2209392,
+   "t_done": 1793201592.572746
+  }
+ ],
+ "t_ft_end": 1793201592.572746,
+ "t_traffic_end": 1793201731.7334242
+}

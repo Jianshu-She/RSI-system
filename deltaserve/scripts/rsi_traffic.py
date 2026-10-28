@@ -19,6 +19,13 @@ trace), correctness, and timing. Run with the ACE venv python from the ACE upstr
   #   sessions arrive at their (Poisson) arrival times; each round waits its real TraceLab gap (tool latency / human
   #   think time), then sends the next ACE request and waits for its answer (closed loop within a session).
   #   Records then also carry session / round / task / kind.
+  # Mixed traffic: --task formula,finer [--mix 1,2] interleaves the splits in that ratio (each request is scored
+  #   with its own task's processor; records carry "task"). --duration also bounds --workload runs.
+  # Several FT rounds instead of one job (rsi_mix.sh): --rounds-at 120,270,... --rounds-dir <rsi_mix_prep.py dir>
+  #   round k starts at its time: DeltaServe (--ft-backend ds) round 0 = POST /start_finetuning (r0 is the launch
+  #   corpus), later rounds POST /ft/ingest r<k>.jsonl; torchtune (--ft-backend tt) touch <rounds-dir>/go<k>.
+  #   Round k is trained once the backend's cumulative input tokens reach rounds 0..k (meta.json): DeltaServe's
+  #   --bwd-csv total_processed_tokens, torchtune's --tt-progress. seq holds traffic for each round.
 """
 import argparse
 import asyncio
@@ -45,6 +52,10 @@ def load_samples(task, split):
 
 
 async def one(client, args, proc, playbook, i, s, out, lock, stats, tag=None):
+    if isinstance(proc, tuple):  # mixed traffic: (task, processor)
+        task_name, proc = proc
+    else:
+        task_name = args.task
     prompt = GENERATOR_PROMPT.format(playbook, "(empty)", s["question"], s["context"])
     t_arrive = time.time()
     await stats["gate"].wait()  # closed only while a sequential FT job holds the GPUs
@@ -76,7 +87,7 @@ async def one(client, args, proc, playbook, i, s, out, lock, stats, tag=None):
     ans = extract_answer(resp) if resp else None
     correct = bool(resp) and proc.answer_is_correct(ans, s["target"])
     gaps = [b - a for a, b in zip(t_chunks, t_chunks[1:])]
-    rec = {"index": i, "task": args.task, "split": args.split, "t_arrive": t_arrive, "t_send": t0,
+    rec = {"index": i, "task": task_name, "split": args.split, "t_arrive": t_arrive, "t_send": t0,
            "latency": t0 + e2e - t_arrive, "ttft": ttft,
            "e2e": e2e, "tbt_mean": sum(gaps) / len(gaps) if gaps else None, "tbt_max": max(gaps) if gaps else None,
            "tbt_gaps": [round(g, 5) for g in gaps] if args.save_gaps else None,
@@ -110,11 +121,33 @@ async def main():
     ap.add_argument("--train-mode", choices=["co", "seq"], default="co")
     ap.add_argument("--ft-final", default="", help="file whose existence means the FT job is done")
     ap.add_argument("--workload", default="", help="agent_trace.py JSON: TraceLab session timing (open loop only)")
+    ap.add_argument("--mix", default="", help="per-task interleave ratio for --task a,b (default 1 each)")
+    ap.add_argument("--rounds-at", default="", help="comma-separated start times (s) of the FT rounds")
+    ap.add_argument("--rounds-dir", default="")
+    ap.add_argument("--ft-backend", choices=["ds", "tt"], default="ds")
+    ap.add_argument("--bwd-csv", default="")
+    ap.add_argument("--tt-progress", default="")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    proc, samples = load_samples(args.task, args.split)
-    if args.limit:
-        samples = samples[: args.limit]
+    tasks_ = args.task.split(",")
+    if len(tasks_) == 1:
+        proc, samples = load_samples(args.task, args.split)
+        if args.limit:
+            samples = samples[: args.limit]
+        procs = [proc] * len(samples)
+    else:  # interleave the splits in the --mix ratio until each is used up
+        loaded = [load_samples(t, args.split) for t in tasks_]
+        ratio = [int(x) for x in args.mix.split(",")] if args.mix else [1] * len(tasks_)
+        pos, samples, procs = [0] * len(tasks_), [], []
+        while any(pos[j] < len(loaded[j][1]) for j in range(len(tasks_))):
+            for j, t in enumerate(tasks_):
+                for _ in range(ratio[j]):
+                    if pos[j] < len(loaded[j][1]):
+                        samples.append(loaded[j][1][pos[j]])
+                        procs.append((t, loaded[j][0]))
+                        pos[j] += 1
+        if args.limit:
+            samples, procs = samples[: args.limit], procs[: args.limit]
     playbook = open(args.context).read() if args.context else "(empty)"
     client = AsyncOpenAI(base_url=args.url, api_key="x", timeout=3600)
     lock, stats = asyncio.Lock(), {"n": 0, "ok": 0, "gate": asyncio.Event(), "inflight": 0}
@@ -144,38 +177,107 @@ async def main():
             await asyncio.sleep(0.5)
         ft["t_ft_end"] = time.time()
         stats["gate"].set()
-    trainer = asyncio.create_task(train_job()) if args.train_at >= 0 else None
+    def trained_tokens():
+        try:
+            if args.ft_backend == "ds":
+                last = open(args.bwd_csv).read().strip().splitlines()[-1].split(",")
+                hdr = open(args.bwd_csv).readline().strip().split(",")
+                return int(last[hdr.index("total_processed_tokens")])
+            return int(open(args.tt_progress).read().strip().splitlines()[-1].split()[1])
+        except (OSError, IndexError, ValueError):
+            return 0
+
+    async def rounds_job():
+        meta = json.load(open(f"{args.rounds_dir}/meta.json"))["rounds"]
+        at = [float(x) for x in args.rounds_at.split(",")]
+        ft["rounds"] = []
+        cum = 0
+        for k, t_k in enumerate(at):
+            cum += meta[k]["tokens"]
+            rd = {"k": k, "tokens": meta[k]["tokens"], "target_cum": cum}
+            ft["rounds"].append(rd)
+            await asyncio.sleep(max(0.0, t_start + t_k - time.time()))
+            rd["t_trigger"] = time.time()
+            if args.train_mode == "seq":
+                stats["gate"].clear()
+                while stats["inflight"]:
+                    await asyncio.sleep(0.05)
+                rd["t_drained"] = time.time()
+            if args.ft_backend == "tt":
+                open(f"{args.rounds_dir}/go{k}", "w").close()
+            elif k == 0:
+                await post("/start_finetuning")
+            else:
+                rows = [json.loads(l) for l in open(f"{args.rounds_dir}/r{k}.jsonl")]
+                rd["ingest"] = json.loads(await post("/ft/ingest", {"rows": rows}))
+            rd["t_ft_start"] = time.time()
+            if args.ft_backend == "ds":  # wake an idle engine loop so FT admission runs
+                await post("/v1/completions", {"model": args.model, "prompt": "hi", "max_tokens": 2})
+            if args.train_mode == "seq":
+                while trained_tokens() < cum:
+                    await asyncio.sleep(0.2)
+                rd["t_done"] = time.time()
+                stats["gate"].set()
+        while True:  # co: record when each round's tokens are trained
+            n = trained_tokens()
+            for rd in ft["rounds"]:
+                if "t_done" not in rd and n >= rd["target_cum"]:
+                    rd["t_done"] = time.time()
+            if all("t_done" in rd for rd in ft["rounds"]):
+                break
+            await asyncio.sleep(0.2)
+        ft["t_ft_end"] = ft["rounds"][-1]["t_done"]
+
+    async def co_round_monitor():  # in co the rounds overlap: mark done times while later rounds are pending
+        while "rounds" not in ft or not all("t_done" in rd for rd in ft["rounds"]):
+            n = trained_tokens()
+            for rd in ft.get("rounds", []):
+                if "t_done" not in rd and "t_trigger" in rd and n >= rd["target_cum"]:
+                    rd["t_done"] = time.time()
+            await asyncio.sleep(0.2)
+    if args.rounds_at:
+        trainer = asyncio.create_task(rounds_job())
+        if args.train_mode == "co":
+            asyncio.create_task(co_round_monitor())
+    else:
+        trainer = asyncio.create_task(train_job()) if args.train_at >= 0 else None
     with open(args.out, "a") as out:
         if args.concurrency:
             sem = asyncio.Semaphore(args.concurrency)
 
             async def bounded(i, s):
                 async with sem:
-                    await one(client, args, proc, playbook, i, s, out, lock, stats)
+                    await one(client, args, procs[i], playbook, i, s, out, lock, stats)
             await asyncio.gather(*(bounded(i, s) for i, s in enumerate(samples)))
         elif args.workload:
             nxt = iter(range(len(samples)))  # every ACE request is sent once, in order, across the sessions
             used_up = asyncio.Event()  # the last request is out: waiting sessions stop instead of sleeping on
 
             async def nap(dt):
+                if args.duration:  # never sleep past the end of sending
+                    dt = min(dt, t_start + args.duration - time.time())
                 try:
                     await asyncio.wait_for(used_up.wait(), max(0.0, dt))
                 except asyncio.TimeoutError:
                     pass
 
             async def agent_session(w):
+                if args.duration and w["arrival"] > args.duration:
+                    return
                 await nap(t_start + w["arrival"] - time.time())
                 task = -1
                 for k, r in enumerate(w["rounds"]):
                     await nap(r["wait"])
+                    if args.duration and time.time() - t_start > args.duration:
+                        return
                     i = None if used_up.is_set() else next(nxt, None)
                     if i is None:
                         return
                     if i == len(samples) - 1:
                         used_up.set()
                     task += r["kind"] == "user"
-                    await one(client, args, proc, playbook, i, samples[i], out, lock, stats,
-                              {"session": w["id"], "round": k, "task": task, "kind": r["kind"]})
+                    await one(client, args, procs[i], playbook, i, samples[i], out, lock, stats,
+                              {"session": w["id"], "round": k, "agent_task": task, "kind": r["kind"]})
             await asyncio.gather(*(agent_session(w) for w in json.load(open(args.workload))["sessions"]))
         else:
             rng = random.Random(args.seed)
@@ -186,7 +288,7 @@ async def main():
                         break
                     if args.stop_file and os.path.exists(args.stop_file):
                         break
-                    tasks.append(asyncio.create_task(one(client, args, proc, playbook, i, s, out, lock, stats)))
+                    tasks.append(asyncio.create_task(one(client, args, procs[i], playbook, i, s, out, lock, stats)))
                     await asyncio.sleep(rng.expovariate(args.rps))
             await asyncio.gather(*tasks)
     if trainer:

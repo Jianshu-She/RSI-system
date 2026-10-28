@@ -184,6 +184,13 @@ class LoraSftTrainerService(BackwardService):
         # config flag is set. Attention core / RMSNorm-bwd / LM-head stay fp32.
         self.base_dtype = self.lm_w.dtype
         self.bwd_dtype = torch.float32 if meta.get("backward_fp32") else self.base_dtype
+        # fp32 matmuls (LM head, attention scores) on TF32 tensor cores — this
+        # child is a fresh process, so the setting is ours alone.
+        if meta.get("backward_tf32"):
+            torch.backends.cuda.matmul.allow_tf32 = True
+        # Fused SDPA attention backward instead of the fp32 per-sample core.
+        from vllm.deltaserve.bwd_services.common import attention as _attn
+        _attn.set_sdpa(bool(meta.get("backward_attn_sdpa")))
 
         # Per-layer views of the frozen base weights, per the family's map.
         # Fused ([out,in]) tensors are sliced once into q/k/v and gate/up by

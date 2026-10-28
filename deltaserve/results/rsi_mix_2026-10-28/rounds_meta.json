@@ -1,0 +1,36 @@
+{
+ "rounds": [
+  {
+   "samples": 172,
+   "tokens": 229142,
+   "by_source": {
+    "sft_from_traces.jsonl": 64867,
+    "finer.jsonl": 164275
+   }
+  },
+  {
+   "samples": 172,
+   "tokens": 231080,
+   "by_source": {
+    "sft_from_traces.jsonl": 65403,
+    "finer.jsonl": 165677
+   }
+  },
+  {
+   "samples": 172,
+   "tokens": 231281,
+   "by_source": {
+    "sft_from_traces.jsonl": 65767,
+    "finer.jsonl": 165514
+   }
+  },
+  {
+   "samples": 172,
+   "tokens": 231666,
+   "by_source": {
+    "sft_from_traces.jsonl": 65044,
+    "finer.jsonl": 166622
+   }
+  }
+ ]
+}

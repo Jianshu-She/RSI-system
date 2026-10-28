@@ -163,6 +163,26 @@ Sessions arrive Poisson (TraceLab's own simulator does this: the corpus records 
 session, each round waits its real gap (tool latency or human think time), sends the next ACE request, and waits
 for the answer. Results: [results/RESULTS.md §6](results/RESULTS.md).
 
+### Mixed traffic + several FT rounds, vs stopping serving and vs vLLM + torchtune
+```bash
+DB=<TraceLab syfi_coding_trace.duckdb>; W=deltaserve/work/runs/rsimix
+python deltaserve/scripts/agent_trace.py --db $DB --sessions 200 --rate 0.072 --out $W/workload_r1.json   # ~1 rps
+python deltaserve/scripts/agent_trace.py --db $DB --sessions 300 --rate 0.15  --out $W/workload_r2.json   # ~2 rps
+$DS_ENV/bin/python deltaserve/scripts/rsi_mix_prep.py --tokenizer $MODEL_DIR --out $W/rounds --rounds 4 \
+    <formula traces sft_from_traces.jsonl> $ACE_SFT_DIR/data_v2/finer.jsonl            # 4 FT rounds (+ torchtune copies)
+FAST="TTFT_SLO=1.0 MAX_TBT_SLO=0.3 PHASE=both DECODE_MARGIN=1.0 PAUSE_MIN_PREFILL=4096 STALL_BUDGET=0.5 BWD_TF32=1 BWD_SDPA=1"
+for r in 1 2; do
+  env ROUNDS=$W/rounds WORKLOAD=$W/workload_r$r.json $FAST bash deltaserve/scripts/rsi_mix_v3.sh co  4,5,6,7 8100 $W/cofast_r$r
+  env ROUNDS=$W/rounds WORKLOAD=$W/workload_r$r.json             bash deltaserve/scripts/rsi_mix_v3.sh seq 4,5,6,7 8100 $W/seq_r$r
+  env ROUNDS=$W/rounds WORKLOAD=$W/workload_r$r.json             bash deltaserve/scripts/rsi_mix_v3.sh tt  4,5,6,7 8100 $W/tt_r$r
+done
+python3 deltaserve/scripts/rsi_mix_report.py $W        # rsi_mix.md + fig_mix_r*.png
+```
+`tt` needs DeltaServe-Baselines' `baseline-vllm` / `baseline-tune` venvs (`BASELINES=`) and a plain Qwen3-32B
+(`TT_MODEL=`); it shares the GPUs time-sliced (`TT_SHARE=mps` exists but returned wrong cuBLAS results on this
+stack). Never edit a driver script while a cell runs it: bash reads scripts lazily. Results:
+[results/RESULTS.md §7](results/RESULTS.md).
+
 ### Sequential vs co-serving on a coding-agent workload (TraceLab)
 ```bash
 # workload: real Claude Code sessions from the TraceLab trace (download the DuckDB from github.com/uw-syfi/TraceLab releases)
@@ -195,6 +215,9 @@ pool immediately; they train once `POST /start_finetuning` has opened admission.
 | YaRN in the backward | automatic from the model config | MODEL_DIR is YaRN x4; without it the LoRA gradients would use the wrong RoPE |
 | PEFT adapter export | `adapter_save_dir`, `adapter_save_every` | `final/` loads directly into vLLM `--lora-modules` (TP shards merged) |
 | long-context FT | `max_saved_finetuning_tokens`, `backward_batch_tokens` | samples up to 16K tokens; chunked attention + streaming LM head in the backward |
+| co-serving fast path | graph save op gathers only the step's FT rows (was the whole buffer) | an FT-carrying step cost a fixed ~150 ms at a 16K buffer, so FT never rode an inference step |
+| scheduler knobs | `finetune.pause_min_prefill_tokens`, `slo.ft_decode_stall_budget` / `ft_stall_window_s` | pause the backward only for big prefills; bound the decode stall FT adds (average-TBT gate) |
+| fast backward | `finetune.backward_tf32`, `finetune.backward_attn_sdpa` | TF32 for the fp32 head/attention matmuls + fused SDPA attention backward: 3.2x faster cycle |
 | LoRA-slot fix | — | vLLM's warm-up removed the pinned training adapter: without the fix the server published into the *inference* adapter's slot and never learned |
 
 ## Troubleshooting

@@ -17,6 +17,7 @@ import csv
 import datetime
 import os
 import time
+from collections import deque
 
 from vllm.config import CUDAGraphMode
 from vllm.deltaserve import dprint
@@ -163,6 +164,10 @@ class FinetuneScheduler(AsyncScheduler):
         self._ttft_slo = float(ft_cfg.ttft_slo)
         self._max_tbt_slo = float(ft_cfg.max_tbt_slo)
         self._avg_tbt_slo = float(ft_cfg.avg_tbt_slo)
+        # Average-TBT gate: predicted decode stall FT added, (time, seconds).
+        self._stall_budget = float(getattr(ft_cfg, "ft_decode_stall_budget", 0.0))
+        self._stall_window = float(getattr(ft_cfg, "ft_stall_window_s", 2.0))
+        self._stalls: deque = deque()
         # [async] Under pipelined (async) scheduling, schedule(N+1) runs while
         # forward(N) is still on the GPU, so a request admitted now isn't
         # prefilled until the in-flight step(s) finish. We add that queue wait to
@@ -437,6 +442,15 @@ class FinetuneScheduler(AsyncScheduler):
         # iteration predicts with EAGER regime (FT forces eager) and checks
         # SLOs against the hypothetical-with-FT cost.
         admitted: list = []
+        # Average-TBT gate: stall already spent in the window, if it applies.
+        stall_gate = (self._stall_budget > 0 and feats.b_d > 0
+                      and self._estimator.is_ready)
+        stall_used = 0.0
+        if stall_gate:
+            while self._stalls and self._stalls[0][0] < now - self._stall_window:
+                self._stalls.popleft()
+            stall_used = sum(x for _, x in self._stalls)
+        stall_add = 0.0
         cur_t_in = float(feats.t_in)
         cur_t_ft = 0.0
         cur_p = int(feats.p)
@@ -489,6 +503,12 @@ class FinetuneScheduler(AsyncScheduler):
                 if ttft_deadline is not None:
                     if (ttft_deadline - now - queue_wait - t_with_ft) <= 0:
                         break
+                if stall_gate:
+                    extra = max(0.0, t_with_ft - t_baseline)
+                    if (stall_used + extra
+                            > self._stall_budget * self._stall_window):
+                        break
+                    stall_add = extra
             # (Cold-start: estimator not ready; admit up to token_cap unchecked.
             # Matches the pre-redesign cold-start behavior where the coord
             # buffer budget was the only cap.)
@@ -506,6 +526,8 @@ class FinetuneScheduler(AsyncScheduler):
         # ─── Stage 5: commit ────────────────────────────────────────────
         if not admitted:
             return 0, []
+        if stall_add > 0:
+            self._stalls.append((now, stall_add))
         store.claim(admitted)
         reqs = [self._ft_injector._make_request(s) for s in admitted]
         return int(cur_t_ft), reqs

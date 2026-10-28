@@ -399,6 +399,74 @@ more co-serving wins, because one held request stalls its whole task.
   adapter is ready 127–364 s later than seq. At 1 and 2 rps most or all of the FT ran after the traffic ended.
   This is the same admission bottleneck as §5: the 0.1 s RPS throttle and the all-or-nothing 16K FT forward.
 
+## 7. Mixed traffic, four FT rounds, and the vLLM + torchtune baseline (`scripts/rsi_mix*.sh`; `rsi_mix_2026-10-28/`)
+
+**Question:** with realistic RSI traffic and a training loop that keeps producing new data, can one DeltaServe
+server beat (a) stopping serving to train and (b) the usual co-location baseline, stock vLLM + torchtune on the same
+GPUs?
+
+**Setup** (Qwen3-32B, TP=4, 4 H200):
+- traffic: ACE formula + finer train splits interleaved 1:2 (finer prompts ~1.8K tokens, formula ~390), TraceLab
+  session timing at ≈1 and ≈2 rps, sending for 750 s;
+- training: 4 rounds of ~230K tokens each (formula traces SFT + finer SFT, 1 epoch), new data at 120 / 270 / 420 /
+  570 s. **Round wait** = data arrives -> trained into the adapter (the RSI loop's turnaround);
+- `seq`: DeltaServe stops serving for each round (arrivals held), trains alone, resumes;
+- `tt`: stock vLLM 0.21 serves while torchtune 0.6.1 (FSDP, its own copy of the weights) trains the same samples
+  with the same LoRA recipe on the same GPUs, time-sliced. (Under NVIDIA MPS with SM caps, cuBLAS returned wrong
+  bf16 GEMMs on this stack and vLLM emitted garbage; uncapped MPS deadlocked. Time-slicing is also what DeltaServe's
+  backward child uses.)
+- `cofast`: DeltaServe co-serving after this round of work (below), SLO TTFT 1 s / max TBT 0.3 s.
+
+**Result: DeltaServe now wins on training turnaround and on almost every latency metric.**
+
+| rps | system | request p50 / p90 / p99 | TTFT p50 / p99 | agent task p50 / p90 | round wait | all 4 rounds trained |
+|---|---|---|---|---|---|---|
+| 1 | seq (stop serving) | 2.57 / 4.1 / **70.9 s** | 50 / 428 ms | 80 / 221 s | 70 s | 640 s |
+| 1 | vLLM + torchtune | 2.87 / 11.9 / 23.5 s | 56 / 1618 ms | **60** / 258 s | 112 s | 683 s |
+| 1 | **DeltaServe** | **2.70 / 8.2 / 13.3 s** | **50 / 819 ms** | 61 / **181 s** | **74 s** | **646 s** |
+| 2 | seq (stop serving) | 2.82 / 4.6 / **73.6 s** | 52 / 605 ms | 57 / 252 s | 72 s | 642 s |
+| 2 | vLLM + torchtune | 3.40 / 16.8 / 29.9 s | 89 / 1906 ms | 73 / 267 s | 121 s | 689 s |
+| 2 | **DeltaServe** | **2.87 / 9.0 / 17.5 s** | **52 / 1114 ms** | **43 / 210 s** | **70.5 s** | **639 s** |
+
+- vs vLLM + torchtune: the new data is in the adapter 34-42 % sooner, request p99 and TTFT p99 are ~half, agent
+  tasks finish as fast (1 rps) or 41 % faster (2 rps), with one copy of the weights instead of two. The one metric
+  it loses is the worst token gap at 2 rps (max-TBT p99 1.5 s vs 1.2 s).
+- vs stopping serving: the same turnaround (70-74 s vs 70-72 s) without holding anyone: request p99 13-18 s instead
+  of 71-74 s.
+- accuracy is the same everywhere (all traffic is served by the base model while the adapter trains).
+
+![Fig 7a](rsi_mix_2026-10-28/fig_mix_r1.png)
+**Fig 7a.** 1 rps. Top: how long each request took (log scale; orange points high up = requests held while
+sequential trains). Bottom: training progress; a round is done when its curve reaches the gray line. DeltaServe
+(magenta) trains as fast as stopping serving (orange, underneath it); vLLM + torchtune (purple) falls behind in every
+round.
+
+![Fig 7b](rsi_mix_2026-10-28/fig_mix_r2.png)
+**Fig 7b.** The same at 2 rps.
+
+**How DeltaServe got there** (every step is a config flag, off by default; all cells in `rsi_mix.md`):
+
+| step | 1 rps round wait | 1 rps request p50 / p99 |
+|---|---|---|
+| start: co-serving as in §5-§6 | 302 s | 3.1 / 11.9 s |
+| + bug fix: the graph save op copied the whole 16K-row buffer 448x per FT step (~150 ms) | (included above) | |
+| + scheduler: pause the backward only for big prefills; average-TBT gate; full decode budget (`cofix`) | 176 s | 5.1 / 14.8 s |
+| + looser SLO (TTFT 1 s, max TBT 0.3 s) (`coloose`) | 134 s | 4.2 / 15.7 s |
+| + fast backward: TF32 + fused SDPA attention (`cofast`) | **74 s** | **2.7 / 13.3 s** |
+
+The backward was the last limit: its child process never used tensor cores for the fp32 LM head and attention
+(78 % of a cycle). With TF32 and the fused SDPA attention backward a 64-layer cycle on one TP=4 rank goes
+4.66 -> 1.45 s (`DeltaServe-vLLM/eval-tp/profile_backward.py`), standalone DeltaServe training goes 3.4K ->
+5.8K tok/s (torchtune: 5.4K), and the loss curve is unchanged (`seqfast` vs `seq`: mean 0.2709 vs 0.2710; gradients
+vs strict fp32: cosine >= 0.99993).
+
+![Fig 7c](rsi_mix_2026-10-28/fig_mix_all_r1.png)
+**Fig 7c.** Every variant at 1 rps, for reference.
+
+Caveats: single runs. GPU 2 of the node thermal-throttled to half speed from 2026-10-26 ~17:00 on, so every cell
+after that ran on GPUs 4-7; cells hit by it, and the failed MPS attempts, are kept out of the table (see
+`DeltaServe-vLLM/EXPERIMENTS.md`, rsi-mix). `cofix_r2` overlapped another job on GPUs 0-3 of the same node.
+
 ## Caveats
 
 - Single runs, temperature 0. Differences below ~3 points (n=200) are noise.

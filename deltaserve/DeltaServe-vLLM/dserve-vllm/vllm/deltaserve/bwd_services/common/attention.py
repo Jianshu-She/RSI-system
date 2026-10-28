@@ -17,6 +17,12 @@ attend to (``0 .. block_end``), so every intermediate is ``[Hq, C, block_end]``
 instead of ``[Hq, L, L]``. The dropped keys are exactly the masked ones, so the
 math is the dense math; only the GEMM/reduction tiling differs. Short samples
 keep the dense path unchanged.
+
+``set_sdpa(True)`` (meta ``backward_attn_sdpa``) swaps the eager backward core for
+PyTorch's fused SDPA kernel (flash attention): bf16 q/k/v, fp32 accumulation and
+softmax statistics inside the kernel, the per-sample causal attention recomputed
+and differentiated by ``torch.autograd.grad``. It replaces the materialized fp32
+``[Hq, L, L]`` scores, mask and softmax (most of a layer's backward at 16K tokens).
 """
 
 import math
@@ -27,6 +33,26 @@ import torch
 # Per-intermediate fp32 budget for one sample's scores-shaped tensors. Above it
 # the cores chunk over query rows (512 MB → C=512 rows at Hq=16, L=16K).
 SCORES_BYTES = int(os.environ.get("DSERVE_ATTN_SCORES_BYTES", 512 << 20))
+
+_SDPA = False
+
+
+def set_sdpa(enabled: bool) -> None:
+    """Route ``attn_backward_core`` through the fused SDPA kernel (see module doc)."""
+    global _SDPA
+    _SDPA = bool(enabled)
+
+
+def _sdpa_backward(q, k, v, g, scale):
+    """One sample's causal attention backward through the fused SDPA kernel.
+    ``q`` [Hq, L, Hd], ``k``/``v`` [Hq, L, Hd] (GQA-repeated), ``g`` [Hq, L, Hd],
+    all bf16/fp16. Returns ``(gq, gk, gv)`` in the same layout and dtype."""
+    q, k, v = (t.detach().unsqueeze(0).requires_grad_() for t in (q, k, v))
+    with torch.enable_grad():
+        out = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, is_causal=True, scale=scale)
+        gq, gk, gv = torch.autograd.grad(out, (q, k, v), g.unsqueeze(0))
+    return gq[0], gk[0], gv[0]
 
 
 def _q_chunk(hq: int, ln: int) -> int:
@@ -151,6 +177,24 @@ def attn_backward_core(qh, kh, vh, grad_ctx, seq_lens, b_start, dims, cdt=torch.
         grad_qh = torch.zeros((n, Hq, Hd), dtype=cdt, device=device)
         grad_kh = torch.zeros((n, Hkv, Hd), dtype=cdt, device=device)
         grad_vh = torch.zeros((n, Hkv, Hd), dtype=cdt, device=device)
+    if _SDPA:
+        lp = qh.dtype if qh.dtype in (torch.bfloat16, torch.float16) else torch.bfloat16
+        for st, ln in zip(b_start, seq_lens):
+            q_blk = qh[st:st + ln].transpose(0, 1).to(lp)       # [Hq, L, Hd]
+            k_blk = kh[st:st + ln].transpose(0, 1).to(lp)       # [Hkv, L, Hd]
+            v_blk = vh[st:st + ln].transpose(0, 1).to(lp)
+            if kv_repeat != 1:
+                k_blk = k_blk.repeat_interleave(kv_repeat, 0)
+                v_blk = v_blk.repeat_interleave(kv_repeat, 0)
+            g = grad_ctx[st:st + ln].transpose(0, 1).to(lp)
+            gq, gk, gv = _sdpa_backward(q_blk, k_blk, v_blk, g, scale)
+            if kv_repeat != 1:
+                gk = gk.float().view(Hkv, kv_repeat, ln, Hd).sum(1)
+                gv = gv.float().view(Hkv, kv_repeat, ln, Hd).sum(1)
+            grad_qh[st:st + ln] = gq.transpose(0, 1).to(cdt)
+            grad_kh[st:st + ln] = gk.transpose(0, 1).to(cdt)
+            grad_vh[st:st + ln] = gv.transpose(0, 1).to(cdt)
+        return grad_qh, grad_kh, grad_vh
     qh_f, kh_f, vh_f = qh.float(), kh.float(), vh.float()
     for st, ln in zip(b_start, seq_lens):
         q_blk = qh_f[st:st + ln].transpose(0, 1)     # [Hq, L, Hd] fp32

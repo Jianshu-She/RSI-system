@@ -606,6 +606,10 @@ class Worker(WorkerBase):
         # happens at the profile run — the call sites must see the slots).
         if ft_cfg.graph_ft_batches:
             accumulator.install_save_points(model)
+            # A has_ft graph step carries at most graph_ft_max_tokens tokens,
+            # so its captured gathers need no more rows than that.
+            accumulator.op_capture_rows = min(accumulator.max_saved,
+                                              int(ft_cfg.graph_ft_max_tokens))
         ack = backward_process.share_activations(
             accumulator.buffers, print_hash=ft_cfg.print_activation_hash)
         dprint(f"shared activation buffers with backward process: {ack}")

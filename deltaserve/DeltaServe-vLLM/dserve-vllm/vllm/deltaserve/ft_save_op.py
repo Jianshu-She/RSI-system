@@ -10,14 +10,19 @@ eager. This module is the graph-native replacement for **mixed** batches
 (inference requests + FT samples):
 
 * ``torch.ops.vllm.dserve_save_rows(x, r, marker, slot)`` gathers a FIXED
-  number of rows (``max_saved``) of ``x`` (+ ``r`` when given — the fused
+  number of rows (``FtSaveState.rows``) of ``x`` (+ ``r`` when given — the fused
   add-norm's residual sum) through a persistent *source-index* tensor and
   writes them into the accumulator buffer for ``slot`` through a persistent
   *destination-index* tensor. Both index tensors, and the buffer table, are
   read from the forward context (``ForwardContext.ft_save``), never from the
   graph: the FT rows' positions and the reserved offset are the CONTENTS of
   the index tensors, refreshed before each step. Unused slots gather row 0
-  into a scratch row past ``max_saved``.
+  into a scratch row past ``max_saved``. A captured graph gathers as many
+  rows as the largest has_ft graph can carry FT tokens
+  (``graph_ft_max_tokens``); the compiled-but-uncaptured path gathers exactly
+  this step's FT rows. (Gathering ``max_saved`` rows every call cost a fixed
+  ~150 ms per mixed step at a 16K-token buffer on Qwen3-32B TP=4 — 448 calls
+  x 16384 rows — and kept FT off every inference step.)
 * Inside vLLM's compiled forward the op is opaque to Dynamo, so its Python
   branch on ``ft_save`` runs at *capture* time: the plain graphs (captured
   with ``ft_save = None``) contain no kernels for it, the ``has_ft`` graphs
@@ -49,6 +54,7 @@ class FtSaveState:
     src: torch.Tensor           # int64 [max_saved]: rows of x to gather
     dst: torch.Tensor           # int64 [max_saved]: rows of the buffer to write
     bufs: list                  # slot -> buffer [max_saved + 1, width] or None
+    rows: int | None = None     # rows to gather: src[:rows] (None = all)
 
 
 def _dserve_save_rows(x: torch.Tensor, r: torch.Tensor | None,
@@ -66,12 +72,14 @@ def _dserve_save_rows(x: torch.Tensor, r: torch.Tensor | None,
     buf = fs.bufs[slot] if slot < len(fs.bufs) else None
     if buf is None:
         return
-    rows = x.index_select(0, fs.src)
+    src, dst = ((fs.src, fs.dst) if fs.rows is None
+                else (fs.src[:fs.rows], fs.dst[:fs.rows]))
+    rows = x.index_select(0, src)
     if r is not None:
-        rows = rows + r.index_select(0, fs.src)
+        rows = rows + r.index_select(0, src)
     if rows.dtype != buf.dtype:
         rows = rows.to(buf.dtype)
-    buf.index_copy_(0, fs.dst, rows)
+    buf.index_copy_(0, dst, rows)
 
 
 def _dserve_save_rows_fake(x: torch.Tensor, r: torch.Tensor | None,

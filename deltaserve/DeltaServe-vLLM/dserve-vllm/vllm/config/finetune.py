@@ -80,6 +80,24 @@ class FinetuneConfig:
     softmax, RMSNorm, LM head / final norm, fp32 LoRA master) are always fp32 either
     way. Set True for strictly more accurate gradients at ~2x backward matmul cost."""
 
+    backward_tf32: bool = False
+    """Let the backward child's fp32 matmuls (LM head, attention scores) use TF32
+    tensor cores: fp32 inputs rounded to a 10-bit mantissa, fp32 accumulate and
+    output. The child is a fresh spawned process, so without this its fp32 GEMMs
+    run on CUDA cores — on Qwen3-32B TP=4 at 16K tokens the fp32 LM head alone is
+    ~1.4 s of a ~4.7 s cycle. Measured (eval-tp/profile_backward.py, one TP=4
+    rank shard, 15.6K tokens): 4.66 -> 2.56 s per 64-layer cycle; loss rel diff
+    7e-7, LoRA grads rel-L2 0.8-1.1 % / cosine >= 0.99994 vs fp32
+    (eval-tp/tf32_check.py), the same order as the bf16 bulk matmuls' own error.
+    Default False keeps strict fp32."""
+
+    backward_attn_sdpa: bool = False
+    """Run the eager attention backward through PyTorch's fused SDPA kernel
+    (flash attention: bf16 q/k/v, fp32 accumulation and softmax statistics in
+    the kernel) instead of the per-sample fp32 core that materializes the
+    ``[Hq, L, L]`` scores, causal mask and softmax. See
+    ``bwd_services/common/attention.py``. Default False keeps the fp32 core."""
+
     backward_cuda_graph: bool = False
     """Capture the per-layer forward-recompute, FFN-backward, and padded-
     attention-backward sub-regions of each layer's manual SFT backward as CUDA
@@ -336,6 +354,18 @@ class FinetuneConfig:
     Independent of the standard 0.9 × ttft_slo TTFT margin, which still
     applies everywhere."""
 
+    ft_decode_stall_budget: float = 0.0
+    """Average-TBT gate: the largest share of wall time, over a sliding
+    ``ft_stall_window_s`` window, that FT may add to steps carrying decodes
+    (the predicted step time with the admitted FT minus the step's baseline
+    prediction). ``max_tbt_slo`` bounds one stall; this bounds how often they
+    happen, so the decodes' average TBT stays near ``1 / (1 - budget)`` of its
+    FT-free value. 0 (default) disables the gate. E.g. 0.3 lets FT add at most
+    0.6 s of decode stall in any 2 s."""
+
+    ft_stall_window_s: float = 2.0
+    """[ft_decode_stall_budget] Sliding-window length in seconds."""
+
     profile_on_launch: bool = True
     """Run the offline execution-time profiling pass at launch (before serving)
     to seed the SLO estimator. When False, the estimator starts cold and relies
@@ -498,6 +528,18 @@ class FinetuneConfig:
     the next execute_model / sample_tokens call; idle steps keep the engine
     stepping while a backward is outstanding, so the check always runs). Cost:
     the child yields for the whole prefill instead of one layer."""
+
+    pause_min_prefill_tokens: int = 0
+    """Pause the backward child only for steps carrying at least this many
+    INFERENCE prefill tokens (FT tokens excluded). 0 (default) keeps today's
+    rule: any prefill-carrying step pauses it. A short prefill time-sliced
+    against the child stays far inside a loose TTFT SLO (Qwen3-32B TP=4: a
+    400-2K-token prefill is 40-80 ms alone, ~2x that time-sliced, vs a 0.5 s
+    SLO), while pausing on every prefill starves the child under steady
+    traffic: backward cycles 3.8 s alone -> 6.7 s at 1 rps, and at 2 rps of
+    2K-token prompts the first cycle never finished while traffic ran
+    (rsi-mix, 2026-10-26). The decision reads only the scheduler's step
+    features, so it is identical on every TP rank."""
 
     # --- fwd-token throttle (extends the prefill-gated pause) ---
     fwd_token_throttle_enable: bool = False
