@@ -1,0 +1,67 @@
+{
+ "mode": "co",
+ "t_start": 1793222926.5244324,
+ "rounds": [
+  {
+   "k": 0,
+   "tokens": 229142,
+   "target_cum": 229142,
+   "t_trigger": 1793223046.5253918,
+   "t_ft_start": 1793223046.5819986,
+   "t_done": 1793223120.5915673
+  },
+  {
+   "k": 1,
+   "tokens": 231080,
+   "target_cum": 460222,
+   "t_trigger": 1793223196.5250926,
+   "ingest": {
+    "added": 172,
+    "tokens": 231080,
+    "skipped_no_target": 0,
+    "skipped_too_long": 0,
+    "corpus_samples": 344,
+    "corpus_tokens": 460222,
+    "epoch": 0
+   },
+   "t_ft_start": 1793223196.9499683,
+   "t_done": 1793223264.7348063
+  },
+  {
+   "k": 2,
+   "tokens": 231281,
+   "target_cum": 691503,
+   "t_trigger": 1793223346.5251975,
+   "ingest": {
+    "added": 172,
+    "tokens": 231281,
+    "skipped_no_target": 0,
+    "skipped_too_long": 0,
+    "corpus_samples": 516,
+    "corpus_tokens": 691503,
+    "epoch": 0
+   },
+   "t_ft_start": 1793223346.9155912,
+   "t_done": 1793223416.9638891
+  },
+  {
+   "k": 3,
+   "tokens": 231666,
+   "target_cum": 923169,
+   "t_trigger": 1793223496.524958,
+   "ingest": {
+    "added": 172,
+    "tokens": 231666,
+    "skipped_no_target": 0,
+    "skipped_too_long": 0,
+    "corpus_samples": 688,
+    "corpus_tokens": 923169,
+    "epoch": 0
+   },
+   "t_ft_start": 1793223496.911065,
+   "t_done": 1793223565.4385371
+  }
+ ],
+ "t_ft_end": 1793223565.4385371,
+ "t_traffic_end": 1793223660.1656039
+}

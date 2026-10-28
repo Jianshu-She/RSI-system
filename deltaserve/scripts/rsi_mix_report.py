@@ -1,6 +1,7 @@
 """Tables + figures for rsi_mix.sh runs: <run_dir>/<cell>_r<rate>/{traffic.jsonl[.gz], traffic.jsonl.ft.json}.
 
   python rsi_mix_report.py <run_dir>   -> <run_dir>/rsi_mix.{md,json}, <run_dir>/fig_mix_r<rate>.png
+  An optional <run_dir>/labels.json {"<rate>": "<label>"} names the load in tables and titles (default "<rate> rps").
 
 Request completion time = done - arrival (incl. a seq hold). Agent task = a user round + its tool loop (first
 arrival -> last done). Round wait = round k trained - round k started (the RSI loop's turnaround: how long the
@@ -22,6 +23,8 @@ CELLS = {"seq": ("sequential (stop serving to train)", "#eb6834"),
          "cofix": ("DeltaServe co-serving, scheduler fixes", "#0b3d91"),
          "coloose": ("DeltaServe co-serving, fixes + loose SLO", "#1a9e77"),
          "cofast": ("DeltaServe co-serving, fixes + loose SLO + fast backward", "#c2185b"),
+         "coguard": ("DeltaServe co-serving, fast backward + slow-step guard", "#e6a100"),
+         "cofastb": ("DeltaServe co-serving, fast backward (repeat)", "#e88bb3"),
          "seqfast": ("sequential, fast backward", "#f2a07b"),
          "tt": ("vLLM + torchtune (same GPUs, time-sliced)", "#6f4bb8")}
 
@@ -79,6 +82,11 @@ def summarize(v, standalone):
     return out
 
 
+def label(run, rate):
+    f = f"{run}/labels.json"
+    return json.load(open(f)).get(rate, f"{rate} rps") if os.path.exists(f) else f"{rate} rps"
+
+
 def main():
     run = sys.argv[1]
     res = {}
@@ -97,22 +105,22 @@ def main():
             table[rate]["standalone_ft_tok_s"] = round(sa)
     json.dump(table, open(f"{run}/rsi_mix.json", "w"), indent=1)
     L = ["# Mixed RSI traffic (ACE formula + finer, TraceLab timing) + 4 FT rounds", "",
-         "| rps | system | request p50 / p90 / p99 (s) | held | TTFT p50 / p99 (ms) | max-TBT p50 / p99 (ms) | "
+         "| load | system | request p50 / p90 / p99 (s) | held | TTFT p50 / p99 (ms) | max-TBT p50 / p99 (ms) | "
          "agent task p50 / p90 (s) | round wait (s) per round | mean | all rounds done (s) | FT share | correct formula / finer |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for rate, cells in table.items():
         for c in [c for c in CELLS if c in cells]:
             s = cells[c]
-            L.append(f"| {rate} | {c} | {' / '.join(map(str, s['latency_p50_p90_p99']))} | {s['held']} | "
+            L.append(f"| {label(run, rate)} | {c} | {' / '.join(map(str, s['latency_p50_p90_p99']))} | {s['held']} | "
                      f"{' / '.join(map(str, s['ttft_ms_p50_p99']))} | {' / '.join(map(str, s['tbt_max_ms_p50_p99']))} | "
                      f"{' / '.join(map(str, s['task_p50_p90']))} | {', '.join(map(str, s['round_wait_s']))} | "
                      f"{s['round_wait_mean']} | {s['all_rounds_done_at']} | {s.get('ft_share_during_traffic', '-')} | "
                      f"{s['correct'].get('formula', '-')} / {s['correct'].get('finer', '-')} |")
         if "standalone_ft_tok_s" in cells:
-            L.append(f"| {rate} | (standalone FT, from seq) | {cells['standalone_ft_tok_s']} tok/s |||||||||||")
+            L.append(f"| {label(run, rate)} | (standalone FT, from seq) | {cells['standalone_ft_tok_s']} tok/s |||||||||||")
     open(f"{run}/rsi_mix.md", "w").write("\n".join(L) + "\n")
     print("\n".join(L))
-    plot(run, res, ["seq", "cofast", "tt"], "fig_mix")       # headline: final DeltaServe vs the two baselines
+    plot(run, res, ["seq", "cofast", "coguard", "tt"], "fig_mix")       # headline: final DeltaServe vs the two baselines
     plot(run, res, list(CELLS), "fig_mix_all")               # every variant
 
 
@@ -150,7 +158,7 @@ def plot(run, res, want, name):
         ax[0].set_yscale("log")
         ax[0].set_ylabel("request completion time (s)\narrival -> done, log")
         ax[0].legend(frameon=False, loc="upper left", bbox_to_anchor=(1.01, 1.0), markerscale=2.5, fontsize=8)
-        ax[0].set_title(f"{rate} rps mixed traffic (formula + finer); dotted lines = a new FT round's data arrives",
+        ax[0].set_title(f"{label(run, rate)}, mixed traffic (formula + finer); dotted lines = a new FT round's data arrives",
                         fontsize=9.5, color=INK, loc="left")
         ax[1].set_ylabel("FT tokens trained (K)")
         ax[1].set_xlabel("time since first arrival (s)")

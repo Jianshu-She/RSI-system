@@ -186,6 +186,25 @@ python3 deltaserve/scripts/rsi_mix_report.py $W        # rsi_mix.md + fig_mix_r*
 (`TT_MODEL=`); it shares the GPUs time-sliced (`TT_SHARE=mps` exists but returned wrong cuBLAS results on this
 stack). Never edit a driver script while a cell runs it: bash reads scripts lazily. Results:
 [results/RESULTS.md §7](results/RESULTS.md).
+`SLOW_GUARD_MS=80` with `rsi_mix_v4.sh` adds the slow-step guard (§7.1).
+
+### The trace's real bursty timeline (open-loop replay)
+```bash
+B=deltaserve/work/runs/rsiburst          # ROUNDS from the mixed-traffic run above
+python deltaserve/scripts/trace_replay.py --db $DB --hours 24 --requests 1125 --duration 750 --out $B/workload_r1.json
+python deltaserve/scripts/trace_replay.py --db $DB --hours 12 --requests 1125 --duration 750 --out $B/workload_r2.json
+GUARD="$FAST SLOW_GUARD_MS=80"
+for r in 1 2; do
+  env ROUNDS=$W/rounds REPLAY_OPEN=1 WORKLOAD=$B/workload_r$r.json $GUARD bash deltaserve/scripts/rsi_mix_v5.sh co 4,5,6,7 8100 $B/coguard_r$r
+  env ROUNDS=$W/rounds REPLAY_OPEN=1 WORKLOAD=$B/workload_r$r.json bash deltaserve/scripts/rsi_mix_v5.sh tt 4,5,6,7 8100 $B/tt_r$r
+  env ROUNDS=$W/rounds REPLAY_OPEN=1 WORKLOAD=$B/workload_r$r.json BWD_TF32=1 BWD_SDPA=1 bash deltaserve/scripts/rsi_mix_v5.sh seq 4,5,6,7 8100 $B/seq_r$r
+done
+python3 deltaserve/scripts/rsi_mix_report.py $B        # labels.json names the loads
+```
+`trace_replay.py` replays the real request start times of one trace window, compressed into `--duration` s (the
+median-CV window among those with about `--requests` rounds). `agent_trace.py --arrival mmpp` (on/off bursty session
+arrivals) is also there but cannot reach the trace's burstiness at 1-2 rps. Results:
+[results/RESULTS.md §8](results/RESULTS.md).
 
 ### Sequential vs co-serving on a coding-agent workload (TraceLab)
 ```bash
@@ -222,6 +241,7 @@ pool immediately; they train once `POST /start_finetuning` has opened admission.
 | co-serving fast path | graph save op gathers only the step's FT rows (was the whole buffer) | an FT-carrying step cost a fixed ~150 ms at a 16K buffer, so FT never rode an inference step |
 | scheduler knobs | `finetune.pause_min_prefill_tokens`, `slo.ft_decode_stall_budget` / `ft_stall_window_s` | pause the backward only for big prefills; bound the decode stall FT adds (average-TBT gate) |
 | fast backward | `finetune.backward_tf32`, `finetune.backward_attn_sdpa` | TF32 for the fp32 head/attention matmuls + fused SDPA attention backward: 3.2x faster cycle |
+| slow-step guard | `finetune.pause_on_slow_step_ms` | pause the backward while an inference step issued during a backward is late; removes the 0.3-1.2 s decode stalls (max-TBT p99 3-4x lower) |
 | LoRA-slot fix | — | vLLM's warm-up removed the pinned training adapter: without the fix the server published into the *inference* adapter's slot and never learned |
 
 ## Troubleshooting

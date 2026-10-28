@@ -19,10 +19,10 @@ index 25ab5f7..1ebd3b7 100644
  python tests/test_qwen3_tp_shard.py                     # Qwen3 M2 gate (42 cases)
 diff --git a/EXPERIMENTS.md b/EXPERIMENTS.md
 new file mode 100644
-index 0000000..8790c38
+index 0000000..de186a0
 --- /dev/null
 +++ b/EXPERIMENTS.md
-@@ -0,0 +1,811 @@
+@@ -0,0 +1,935 @@
 +# Experiment log
 +
 +### lc16k-a — Qwen3-32B TP4 16K-context FT bring-up (pure FT)   (2026-10-12, H200 node, GPUs 0-3 ×4)
@@ -812,7 +812,8 @@ index 0000000..8790c38
 +- Actual: (pending)
 +- Actual (coloose_r1, 1 rps): round wait 130 / 134 / 134 / 137 s (mean 134; cofix 176, tt 112); request
 +  2.6 -> 4.2 / 10.2 / 15.7 s p50/p90/p99; TTFT p99 1.09 s (cofix 1.96); agent task p50 89 s. Better than predicted
-+  (150-170 s), just above the 130 s falsification line: admission was still part of the limit. 2 rps pending.
++  (150-170 s), just above the 130 s falsification line: admission was still part of the limit. 2 rps: round wait
++  131 s (tt 121), request 4.9 / 12.6 / 19.5 s, agent task p50 68 s.
 +
 +### rsi-mix-fast — a 3.2x faster backward (TF32 + fused SDPA attention) under the loose-SLO scheduler   (2026-10-28, GPUs 4-7)
 +- Audit: the user's goal is to beat vLLM + torchtune outright. DeltaServe's backward was the gap: alone 4.3K tok/s
@@ -833,7 +834,130 @@ index 0000000..8790c38
 +  ~0.8-1.0 of the OLD standalone; request latency similar to coloose (backward occupies the GPU half as long,
 +  so maybe better); seqfast round ~45 s (standalone ~5.5-6.5K tok/s, > torchtune 5.4K); seqfast loss curve
 +  within noise of seq_r1. FALSIFIED if cofast_r1 round wait > 112 s (tt) or seqfast loss diverges from seq_r1.
-+- Actual: (pending)
++- Actual (rsi_mix_report.py; results/rsi_mix_2026-10-28 in RSI-system):
++  | rps | sys | request p50/p90/p99 s | TTFT p50/p99 ms | max-TBT p50/p99 ms | agent task p50/p90 s | round wait s | all done s |
++  | 1 | cofast | 2.70 / 8.2 / 13.3 | 50 / 819 | 28 / 1079 | 61 / 181 | 74 (78, 71, 73, 76) | 646 |
++  | 1 | tt     | 2.87 / 11.9 / 23.5 | 56 / 1618 | 72 / 1191 | 60 / 258 | 112 | 683 |
++  | 1 | seq    | 2.57 / 4.1 / 70.9 | 50 / 428 | 27 / 170 | 80 / 221 | 70 | 640 |
++  | 2 | cofast | 2.87 / 9.0 / 17.5 | 52 / 1114 | 80 / 1517 | 43 / 210 | 70.5 | 639 |
++  | 2 | tt     | 3.40 / 16.8 / 29.9 | 89 / 1906 | 88 / 1191 | 73 / 267 | 121 | 689 |
++  | 2 | coloose| 4.9 / 12.6 / 19.5 | 100 / 1354 | 202 / 1262 | 68 / 252 | 131 | 699 |
++  seqfast_r1: rounds trained in 41 / 39 / 40 / 39 s -> standalone 5791 tok/s (seq_r1 3397; torchtune 5426); loss
++  per cycle identical for the first 3 cycles, mean 0.2709 vs 0.2710. Backward cycle under 1 rps traffic 3.8 s
++  (cofix 7.7 s). Accuracy equal to tt/seq.
++  Prediction check: round wait 74 s at 1 rps (predicted 80-100, PASS), standalone 5.8K (predicted 5.5-6.5K, PASS),
++  loss within noise (PASS); latency better than coloose (predicted similar). Not falsified.
++- Decision: DeltaServe (scheduler fixes + loose SLO + fast backward) beats vLLM + torchtune on round wait (-34 %
++  at 1 rps, -42 % at 2 rps), request p50/p90/p99, TTFT p50/p99 and agent-task p90; ties agent-task p50 at 1 rps
++  (61 vs 60 s) and wins it at 2 rps (43 vs 73 s); loses only max-TBT p99 at 2 rps (1.5 vs 1.2 s: decodes
++  time-sliced with the backward). Next if needed: the worst-token-gap tail (pause the backward for a decode step
++  that has waited > X ms), and the remaining ~12 ms/layer of elementwise backward ops (fusion).
++
++### rsi-e2e-fast — the end-to-end ACE loop (run_e2e.sh) with the RESULTS §7 co-serving changes   (2026-10-28, GPUs 4-7, eval GPU 0)
++- Why: the user asked to rerun the end-to-end ACE experiment on the improved DeltaServe. Prior runs (e2e 10-19 x2):
++  C trained 526K tok in 4 min 35 s / 4 min 37 s; D adapter 75.0 / 74.5 % vs base 68.0 / 66.5 % (p < 0.01).
++- Command: `CONFIG=deltaserve/configs/coserve_e2e_fast.yaml DS_GPUS=4,5,6,7 EVAL_GPU=0 bash deltaserve/scripts/run_e2e.sh e2e_fast`
++- Predicted: C ~2.5 min; C TTFT p50 <= 84 ms; D 74-75 %. FALSIFIED if D < 72 % or C slower than 4.5 min.
++- Actual (work/runs/e2e_fast): C trained 34 cycles / 526K tok in 2 min 38 s (was 4:35); loss 0.287 -> 0.149;
++  D adapter 77.0 % vs base 68.5 % (+22/-5, p = 0.0015); B 427/500. BUT C latency (n=77): TTFT p50/p90/p99
++  96 / 1497 / 2229 ms (was 81 / 173 / 262), < 0.3 s 69 % (was 99 %), e2e p50/p90 5.9 / 11.0 s (was 2.1 / 3.9),
++  per-request max TBT p50 557 ms (was 20 ms). Criteria: training PASS, accuracy PASS, TTFT p50 96 > 84 FAIL.
++- Decision: the §7 admission settings (phase both, stall budget 0.5, no prefill pause) are tuned for throughput
++  under mixed traffic; at 0.5 rps light formula traffic the old conservative admission already finds enough idle
++  GPU time, and the aggressive one just stalls users. Next: rsi-e2e-fastbwd — the ORIGINAL admission + only the
++  fast backward (backward_tf32, backward_attn_sdpa).
++
++### rsi-e2e-fastbwd — end-to-end loop, original admission + only the fast backward   (2026-10-28, GPUs 4-7, eval GPU 0)
++- Why: rsi-e2e-fast trained 42 % faster but hurt C latency badly (TTFT p90 1.5 s). Separate the two effects: keep
++  coserve_e2e.yaml's admission (idle-gap FT, RPS throttle, prefill phase, SLO 0.3 / 0.05) and turn on only
++  backward_tf32 + backward_attn_sdpa.
++- Command: `CONFIG=deltaserve/configs/coserve_e2e_fastbwd.yaml DS_GPUS=4,5,6,7 EVAL_GPU=0 bash deltaserve/scripts/run_e2e.sh e2e_fastbwd`
++- Predicted: C ~3-3.5 min (backward 1.7x faster, forward/idle-gap admission unchanged); C TTFT like the old runs
++  (p50 ~85 ms, p99 < 0.8 s, < 0.3 s >= 95 %); D 74-77 %. FALSIFIED if C TTFT p90 > 0.4 s or C not faster than 4:35.
++- Actual (work/runs/e2e_fastbwd): C 34 cycles / 527K tok in 3 min 25 s (old 4:35, -25 %); loss 0.286 -> 0.152;
++  C TTFT p50/p90/p99 77 / 123 / 246 ms, < 0.3 s 99 % (old 81 / 173 / 262, 99 %); e2e p50/p90 1.99 / 3.12 s (old
++  2.06 / 3.94); max TBT p50 17 ms (old 20). D 74.0 % vs base 68.0 % (+19/-7, p = 0.029; old 75.0 / 74.5). PASS on
++  all three predictions.
++- Decision: for the light single-task e2e loop the right setting is the original admission + the fast backward
++  (configs/coserve_e2e_fastbwd.yaml): faster training at unchanged latency. The aggressive §7 admission is for
++  heavy mixed traffic, where idle GPU time is scarce.
++
++### rsi-mix-guard — slow-step guard against the max-TBT tail   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7)
++- Audit: rsi-mix final (cofast) beats vLLM+torchtune on 15/18 metrics, ties 2, loses 1: 2 rps max-TBT p99 1517 vs
++  1191 ms. Single run per cell, no variance yet. Step trace of cofast_r2: decode-only steps with a backward in
++  flight (decode_bwd) are p50 20 / p99 100 ms, but ~0.5 % stall 0.3-1.2 s (predicted 9 ms), at random phase of
++  the 4.3 s backward cycle; many requests share one 1.517 s gap. Those steps run unpaused (cofast pauses only for
++  prefills >= 4096 tok), so time-slicing against the 4-rank backward (incl. its spinning NCCL reduces) is the
++  likely cause.
++- Change: finetune.pause_on_slow_step_ms (new, default 0 = off; deltaserve/slow_step_guard.py): a per-rank
++  watchdog pauses the backward child when an inference step dispatched during a backward is still not complete
++  after X ms, released when no such step is in flight; the child's rank-symmetric pause agreement stops all ranks.
++  Gate: tests/test_slow_step_guard.py 12/12 (GPU).
++- Command (work/rsimix14.sh): cofast knobs `TTFT_SLO=1.0 MAX_TBT_SLO=0.3 PHASE=both DECODE_MARGIN=1.0
++  PAUSE_MIN_PREFILL=4096 STALL_BUDGET=0.5 BWD_TF32=1 BWD_SDPA=1 STEP_TRACE=1` + `SLOW_GUARD_MS=80`,
++  scripts/rsi_mix_v4.sh co 4,5,6,7 8100 -> coguard_r2, coguard_r1; then a cofast_r2 repeat (cofastb_r2, guard off)
++  for run-to-run noise. Same workload_r{1,2}.json + rounds as rsi-mix.
++- Predicted: coguard_r2 max-TBT p99 <= 400 ms (beats tt 1191), decode_bwd max < 0.3 s; round wait +0-10 %
++  (70.5 -> <= 78 s); request p99 unchanged or better (17.5 s). FALSIFIED if max-TBT p99 stays > 1 s (then the
++  stall is not the child's GPU share, e.g. host-side or NCCL coupling the pause doesn't reach) or round wait > 90 s.
++- Actual coguard_r2 (2 rps, 1500/1500 ok): max-TBT p50/p99 79 / 364 ms (cofast 80 / 1517, tt 88 / 1191); TTFT
++  p50/p99 53 / 461 ms (cofast 52 / 1114, tt 89 / 1906); request p50/p90/p99 2.96 / 6.58 / 10.77 s (cofast 2.87 /
++  8.98 / 17.53, tt 3.40 / 16.8 / 29.9); agent task p50/p90 40 / 196 s (cofast 43 / 210, tt 73 / 267); round wait
++  79.6, 83.3, 85.9, 78.0 = mean 81.7 s (cofast 70.5, tt 121.1); correct 347/500 + 277/1000. decode_bwd steps p99
++  36 ms, max 0.299 s, 0 over 0.3 s (cofast p99 100 ms, max 1.16 s, 45 over 0.3 s). Predictions: max-TBT <= 400
++  PASS, decode max < 0.3 s PASS, request p99 not worse PASS (better), round wait <= 78 s FAIL (81.7, +16 %).
++  Now beats tt on every 2 rps metric. Single run; coguard_r1 + cofastb_r2 (noise) still running.
++
++### rsi-burst — main comparison on the trace's REAL bursty timeline   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7)
++- Audit: every rsi-mix / rsi-tracelab run used agent_trace.py: real per-session gaps, but sessions start as a Poisson
++  process; at 1-2 rps dozens of sessions overlap and the traffic is Poisson-like (measured on the runs: 10 s-window
++  CV 0.33-0.52, inter-arrival CV 1.0-1.26, 0 % idle windows). The TraceLab trace itself (140K Claude requests, 243
++  days) is very bursty: in hours with >= 100 req, 10 s-window CV 1.81, 70 % idle windows, peak 10x mean (>= 20 req/h:
++  2.69, 84 %, 16x). The paper reports no arrival-process statistics. Our claim (agent traffic is bursty; co-serving
++  trains in the valleys) was therefore never tested. MMPP session arrivals (agent_trace.py --arrival mmpp) did not
++  reach the trace's statistics (CV <= 1.6, idle <= 27 %: overlapping sessions fill the gaps); a closed-loop replay of
++  the real timeline flattens it too (CV 1.88 -> 0.6: ~10 sessions, one request in flight each).
++- Workload: scripts/trace_replay.py --hours 24 --requests 1125 --duration 750 -> the real request timeline of a 24 h
++  window (median-CV window of 462 candidates, start 2026-03-06 15:30 UTC, 10 sessions, 862 requests), compressed
++  115x into 750 s and replayed OPEN-LOOP (rsi_traffic.py --replay-open): 1.15 rps mean, 10 s-window CV 1.88, 55 %
++  idle windows, peak 9.3x mean. Second workload: --hours 12 (1336 req, 1.78 rps, CV 1.26, 29 % idle, peak 7x).
++  Request content, FT rounds (4 x ~230K tok at 120/270/420/570 s) and metrics as rsi-mix.
++- Cells (work/rsiburst.sh, scripts/rsi_mix_v5.sh, runs/rsiburst/<cell>_r<1|2>, r1 = 24 h, r2 = 12 h): coguard
++  (cofast knobs + SLOW_GUARD_MS=80), tt (vLLM + torchtune, time-sliced), seq (stop serving to train, fast backward).
++- Predicted (24 h): co round wait <= 75 s (more valleys than Poisson 2 rps: 81.7) and request p99 < tt's by >= 30 %;
++  tt TTFT p99 > 2 s in the bursts; seq holds a burst whenever a round lands in one (request p99 > 60 s). FALSIFIED
++  if co's round wait is not below tt's, or co's request p99 is worse than tt's.
++- Actual coguard_r1 (1 rps): max-TBT p50/p99 78 / 294 ms (cofast 28 / 1079, tt 72 / 1191); TTFT p99 472 (cofast
++  819, tt 1618); request p50/p90/p99 2.77 / 5.64 / 9.50 s (cofast 2.70 / 8.21 / 13.26, tt 2.87 / 11.9 / 23.5);
++  agent task p50/p90 43 / 229 s (cofast 61 / 181, tt 60 / 258); round wait mean 88.2 s (cofast 74.1, tt 112.2).
++  decode_bwd max 0.29 s (cofast 1.07). The max-TBT p50 jump 28 -> 78 ms is a bimodality artifact, not slower steps:
++  per-request max-TBT is ~25 ms (no slow step met) or ~80-160 ms (met an FT-carrying mixed step, ~157 ms p50 in
++  both runs); requests meeting >= 1 gap > 60 ms went 47 % -> 56 % (training spans more of the run: round wait +19 %)
++  while gaps > 60 ms per request fell 3.43 -> 2.38. Cost of the guard at both rates: round wait +16-19 %.
++- Actual cofastb_r2 (cofast repeat, guard off, 2 rps): round wait 74.1, 68.2, 70.4, 68.9 = 70.4 s (run 1: 70.5);
++  request p50/p90/p99 2.86 / 9.28 / 16.77 s (2.87 / 8.98 / 17.53); TTFT p99 1138 (1114); max-TBT p99 1156 (1517);
++  correct 346 + 271 (345 + 271). Run-to-run noise: round wait +-0.1 s, request p99 +-4 %, but max-TBT p99 +-25 %
++  (a p99 of per-request maxima set by a handful of 1 s stalls) -- the original 1517-vs-1191 "loss" to tt was inside
++  that noise; coguard's 364 ms is far outside it.
++- Decision: the guard removes the decode stalls (max-TBT p99 3-4x lower, request p99 -35 %) for +16-19 % round wait,
++  still 22-33 % below tt. Keep it on (SLOW_GUARD_MS=80) for the bursty main comparison (rsi-burst).
++- Actual r1 (24 h window, 862 req, 0 errors in all three): request p50/p90/p99 seq 3.58 / 5.95 / 29.3 s (73 held),
++  coguard 3.94 / 7.90 / 12.7 s (0 held), tt 23.6 / 63.9 / 78.6 s; TTFT p99 754 / 558 / 3784 ms; max-TBT p99 282 /
++  331 / 1962 ms; agent task p50/p90 6.6 / 30.6, 9.6 / 28.8, 36.2 / 82.1 s; round wait mean 40.5 / 55.1 / 93.4 s;
++  correct 366 / 368 / 374 of 862. Predictions: co round wait <= 75 PASS (55.1); co request p99 >= 30 % below tt
++  PASS (-84 %); tt TTFT p99 > 2 s PASS (3.8); seq request p99 > 60 s FAIL (29.3: the valleys are long enough that
++  a 40 s seq round holds only 73 requests). Not falsified vs tt; but seq is strong here: fastest rounds (40.5 vs
++  55.1) and best median latency / task p50; co wins only the tails (request p99 2.3x, TTFT p99, task p90, 0 held).
++- Decision: report honestly -- under bursty traffic co-serving dominates the shared-GPU baseline (tt) and trades
++  ~36 % slower rounds vs seq for never blocking users. Checked: rounds 0-2 do NOT sit in valleys -- 73 / 46 /
++  59 requests arrive during them (mean 12 / 3.5 / 7 in flight); backward cycles stretch 2.4 s -> 3.5-3.9 s (+50-60 %)
++  while sharing the GPU, even at 3.5 requests in flight. Round 3 has no traffic and matches seq (39.8 vs 39.4 s).
++  So the gap to seq is the price of serving during training, not a scheduler bug in the valleys.
++- Actual r2 (12 h window, 1336 req, 0 errors): request p50/p90/p99 seq 3.59 / 38.8 / 49.4 s (418 held), coguard
++  3.91 / 11.8 / 18.3 s (0 held), tt 17.5 / 99.0 / 130.6 s; TTFT p99 2753 / 662 / 4069 ms; max-TBT p99 576 / 506 /
++  1884 ms; agent task p50/p90 9.7 / 46.9, 7.2 / 27.9, 25.9 / 76.7 s; round wait mean 42.6 / 60.7 / 104.8 s; correct
++  565 / 551 / 562 of 1336. At this denser load co beats seq on every latency metric and on agent tasks (p90 -40 %);
++  seq still has the fastest rounds (-30 %). tt is last everywhere (rounds +73 % vs co, request p99 7x).
 diff --git a/README.md b/README.md
 index 477b361..8c66ce8 100644
 --- a/README.md
@@ -1399,7 +1523,7 @@ index 0000000..810aae8
 +parallel:
 +  tensor_parallel_size: 4
 diff --git a/dserve-vllm/vllm/config/finetune.py b/dserve-vllm/vllm/config/finetune.py
-index 7d6d4be..526b0fe 100644
+index 7d6d4be..8076241 100644
 --- a/dserve-vllm/vllm/config/finetune.py
 +++ b/dserve-vllm/vllm/config/finetune.py
 @@ -42,7 +42,23 @@ class FinetuneConfig:
@@ -1504,7 +1628,7 @@ index 7d6d4be..526b0fe 100644
      profile_on_launch: bool = True
      """Run the offline execution-time profiling pass at launch (before serving)
      to seed the SLO estimator. When False, the estimator starts cold and relies
-@@ -457,6 +529,18 @@ class FinetuneConfig:
+@@ -457,6 +529,28 @@ class FinetuneConfig:
      stepping while a backward is outstanding, so the check always runs). Cost:
      the child yields for the whole prefill instead of one layer."""
  
@@ -1520,10 +1644,20 @@ index 7d6d4be..526b0fe 100644
 +    (rsi-mix, 2026-10-26). The decision reads only the scheduler's step
 +    features, so it is identical on every TP rank."""
 +
++    pause_on_slow_step_ms: float = 0.0
++    """Slow-step guard (0 = off). A per-rank watchdog pauses the backward child
++    when an inference step dispatched while a backward is outstanding has not
++    completed on the GPU after this many ms, and releases it once every such
++    step has completed. Without MPS a decode step time-sliced against the child
++    usually costs ~2x (20 ms vs 9 ms), but ~0.5 % of them stall 0.3-1.2 s
++    (Qwen3-32B TP=4, rsi-mix 2 rps), which sets the max-TBT tail. The pause
++    reaches every rank's child at the same boundary through the existing
++    pause agreement, so a rank-local trigger is safe."""
++
      # --- fwd-token throttle (extends the prefill-gated pause) ---
      fwd_token_throttle_enable: bool = False
      """Master switch for the fwd-token-throttle pause source. When False
-@@ -476,15 +560,22 @@ class FinetuneConfig:
+@@ -476,15 +570,22 @@ class FinetuneConfig:
              or (enable and total > fwd_token_throttle)   # new rule
          )
  
@@ -2440,7 +2574,7 @@ index 0000000..d400a7a
 +        x = x["input_ids"]
 +    return list(x)
 diff --git a/dserve-vllm/vllm/deltaserve/coordinator.py b/dserve-vllm/vllm/deltaserve/coordinator.py
-index ca6b900..f739da4 100644
+index ca6b900..38c6fd3 100644
 --- a/dserve-vllm/vllm/deltaserve/coordinator.py
 +++ b/dserve-vllm/vllm/deltaserve/coordinator.py
 @@ -263,6 +263,13 @@ class FTAborted(Exception):
@@ -2504,7 +2638,17 @@ index ca6b900..f739da4 100644
          self.rps_throttle_active = False
          # Wall-clock instant (monotonic seconds) at which the throttle
          # most recently engaged. Used by ``check_rps_throttle`` to
-@@ -465,11 +481,18 @@ class FinetuneCoordinator:
+@@ -366,6 +382,9 @@ class FinetuneCoordinator:
+         self.epoch_flush_pending = False
+         self.min_sample_len = 1            # set by the scheduler from the store
+         self.backward_process = None       # set by the worker
++        # [pause_on_slow_step_ms] set by SlowStepGuard while a late inference
++        # step holds the child paused; every other resume is a no-op meanwhile.
++        self.guard_hold = False
+         self.backward_sleep_s = 2.0        # set by the worker from config
+         # Current FT corpus epoch (set each step by the scheduler from the store);
+         # forwarded to the backward process so it can StepLR per epoch.
+@@ -465,11 +484,18 @@ class FinetuneCoordinator:
  
      def space_remaining(self) -> int:
          # Free rows = capacity minus committed AND reserved-in-flight.
@@ -2525,7 +2669,7 @@ index ca6b900..f739da4 100644
              return 0
          return min(self.per_step_budget, self.space_remaining())
  
-@@ -490,21 +513,14 @@ class FinetuneCoordinator:
+@@ -490,21 +516,14 @@ class FinetuneCoordinator:
          longer flaps the gate — useful when bursts are short but
          you want the FT pause to be sticky for a while.
  
@@ -2555,7 +2699,7 @@ index ca6b900..f739da4 100644
          ``self.rps_throttle_engaged_at`` is the engage timestamp
          used to enforce ``close_time``."""
          if close_rps <= 0:
-@@ -613,7 +629,8 @@ class FinetuneCoordinator:
+@@ -613,7 +632,8 @@ class FinetuneCoordinator:
          # the scheduler reserves a per-step offset via reserve().)
          return self.fill_count + self.reserved_fill
  
@@ -2565,7 +2709,7 @@ index ca6b900..f739da4 100644
          """Reserve n FT rows for a scheduled step and return the buffer write
          offset they own. Called by the scheduler AFTER the FT partition (only the
          rows that actually scheduled). Committed by record_capture post-forward.
-@@ -626,6 +643,8 @@ class FinetuneCoordinator:
+@@ -626,6 +646,8 @@ class FinetuneCoordinator:
          self.reserved_fill += int(n)
          if samples:
              self.buffer_samples.extend(samples)
@@ -2574,7 +2718,7 @@ index ca6b900..f739da4 100644
          return offset
  
      def release_reserve(self, n: int, samples: list | None = None) -> None:
-@@ -707,7 +726,8 @@ class FinetuneCoordinator:
+@@ -707,7 +729,8 @@ class FinetuneCoordinator:
                  and self.fill_count > 0 and not self.pending_backward):
              self._trigger_backward(reason="epoch-end flush")
  
@@ -2584,7 +2728,7 @@ index ca6b900..f739da4 100644
          """Runner reports n FT token rows just SAVED at this step's reserved
          offset. Commits them (and reconciles the reservation). Both backward
          triggers fire HERE, post-forward — after the activations are saved and
-@@ -723,6 +743,11 @@ class FinetuneCoordinator:
+@@ -723,6 +746,11 @@ class FinetuneCoordinator:
          self.reserved_fill = max(0, self.reserved_fill - n)
          if sample_lens:
              self.sample_lens.extend(int(x) for x in sample_lens)
@@ -2596,7 +2740,7 @@ index ca6b900..f739da4 100644
          if self.pending_backward or self.reserved_fill > 0:
              return  # wait until all in-flight saves for this buffer are committed
          if self.space_remaining() < self.min_sample_len:
-@@ -777,7 +802,7 @@ class FinetuneCoordinator:
+@@ -777,7 +805,7 @@ class FinetuneCoordinator:
                  torch.cuda.synchronize()
              self.backward_process.notify_buffer_full(
                  self.fill_count, self.backward_sleep_s, list(self.sample_lens),
@@ -2605,7 +2749,7 @@ index ca6b900..f739da4 100644
          elif self.relay_mode:
              # [M4.1] Scheduler-side coordinator under TP: no local handle. Stash
              # the trigger params for the scheduler to broadcast on SchedulerOutput
-@@ -786,12 +811,25 @@ class FinetuneCoordinator:
+@@ -786,12 +814,25 @@ class FinetuneCoordinator:
              self._pending_trigger_cmd = {
                  "n": int(self.fill_count),
                  "sample_lens": list(self.sample_lens),
@@ -2631,7 +2775,16 @@ index ca6b900..f739da4 100644
      def gpu_pause_backward(self) -> None:
          """[Phase 5] Ask the backward child to yield the GPU (it pauses at its
          next layer boundary). Called by the model runner before an inference
-@@ -882,6 +920,7 @@ class FinetuneCoordinator:
+@@ -802,7 +843,7 @@ class FinetuneCoordinator:
+     def gpu_resume_backward(self) -> None:
+         """[Phase 5] Return the GPU to the backward child after the inference
+         prefill forward completes."""
+-        if self.backward_process is not None:
++        if self.backward_process is not None and not self.guard_hold:
+             self.backward_process.set_pause(False)
+ 
+     # A backward that has been outstanding this long (vs ~0.1-0.5 s normally)
+@@ -882,6 +923,7 @@ class FinetuneCoordinator:
          self.fill_count = 0
          self.reserved_fill = 0
          self.sample_lens = []
@@ -2639,7 +2792,7 @@ index ca6b900..f739da4 100644
          self.buffer_samples = []
          self.pending_backward = False
          self.admission_open = True
-@@ -900,14 +939,16 @@ class FinetuneCoordinator:
+@@ -900,14 +942,16 @@ class FinetuneCoordinator:
          self._pending_trigger_cmd = None
          return cmd
  
@@ -2658,7 +2811,7 @@ index ca6b900..f739da4 100644
  
      def apply_relayed_done(self, resp: dict | None) -> None:
          """Scheduler side: apply the worker's relayed backward-done ack. Mirrors
-@@ -926,6 +967,7 @@ class FinetuneCoordinator:
+@@ -926,6 +970,7 @@ class FinetuneCoordinator:
          self.fill_count = 0
          self.reserved_fill = 0
          self.sample_lens = []
@@ -2666,7 +2819,7 @@ index ca6b900..f739da4 100644
          self.buffer_samples = []
          self.pending_backward = False
          self.admission_open = True
-@@ -944,9 +986,10 @@ class FinetuneCoordinator:
+@@ -944,9 +989,10 @@ class FinetuneCoordinator:
          # arrives (pipe sends are ordered, so it lands before the work signal
          # below and the very first cycle line already shows ``N/total``).
          total = int(cmd.get("total_tokens_per_epoch", 0) or 0)
@@ -2679,7 +2832,7 @@ index ca6b900..f739da4 100644
          if self.fwd_throttle_active:
              self.gpu_pause_backward()
          if self.capture_done_evt is not None:
-@@ -956,7 +999,8 @@ class FinetuneCoordinator:
+@@ -956,7 +1002,8 @@ class FinetuneCoordinator:
          self.pending_backward = True
          self.backward_process.notify_buffer_full(
              int(cmd.get("n", 0)), self.backward_sleep_s,
@@ -3196,6 +3349,93 @@ index f72f195..e6d7984 100644
  
          # Retire FT requests BEFORE the base loop: free their KV the same step
          # WITHOUT touching finished_req_ids (so the frontend never sees them).
+diff --git a/dserve-vllm/vllm/deltaserve/slow_step_guard.py b/dserve-vllm/vllm/deltaserve/slow_step_guard.py
+new file mode 100644
+index 0000000..3460035
+--- /dev/null
++++ b/dserve-vllm/vllm/deltaserve/slow_step_guard.py
+@@ -0,0 +1,81 @@
++"""[pause_on_slow_step_ms] Pause the backward child while an inference step is late.
++
++The runner brackets every inference-bearing forward issued while a backward is
++outstanding with ``begin()`` (before its pause decision) and ``end(tok, event)``
++(an event recorded behind the forward). A daemon thread polls the in-flight
++steps; when the oldest has been in flight longer than the threshold it clears
++the child's grant and sets ``coord.guard_hold``, which turns every other
++``gpu_resume_backward`` into a no-op. Once no step is in flight it drops the hold
++and resumes the child unless another pause owner still holds it (the
++prefill-completion event or the forward-token throttle; ``owner_busy``).
++
++Under TP each rank runs its own guard; the child's ``_maybe_pause`` agreement
++(MAX-all-reduce of "any grant cleared") stops every rank at the same boundary,
++so a trigger on one rank pauses them all.
++"""
++import collections
++import threading
++import time
++
++import torch
++
++
++class SlowStepGuard:
++
++    def __init__(self, coord, threshold_s, owner_busy, poll_s=0.002):
++        self.coord = coord
++        self.threshold_s = float(threshold_s)
++        self.owner_busy = owner_busy   # () -> True while another pause owner holds
++        self.poll_s = poll_s
++        self.triggers = 0
++        self._lock = threading.Lock()
++        self._inflight = collections.OrderedDict()   # tok -> [t0, event | None]
++        self._next = 0
++        self._device = torch.cuda.current_device()
++        threading.Thread(target=self._run, name="dserve-slow-step-guard",
++                         daemon=True).start()
++
++    def begin(self):
++        with self._lock:
++            tok = self._next
++            self._next += 1
++            self._inflight[tok] = [time.perf_counter(), None]
++        return tok
++
++    def end(self, tok, event):
++        """``event`` recorded behind the forward; None = nothing reached the GPU."""
++        with self._lock:
++            if event is None:
++                self._inflight.pop(tok, None)
++            elif tok in self._inflight:
++                self._inflight[tok][1] = event
++
++    def _oldest_pending(self):
++        with self._lock:
++            while self._inflight:
++                tok, (t0, ev) = next(iter(self._inflight.items()))
++                if ev is not None and ev.query():
++                    del self._inflight[tok]
++                    continue
++                return t0
++        return None
++
++    def _run(self):
++        torch.cuda.set_device(self._device)
++        coord = self.coord
++        while True:
++            time.sleep(self.poll_s)
++            try:
++                t0 = self._oldest_pending()
++                if t0 is not None and time.perf_counter() - t0 > self.threshold_s:
++                    if not coord.guard_hold:
++                        coord.guard_hold = True
++                        self.triggers += 1
++                    # Re-assert every poll: a resume that raced the hold is undone.
++                    coord.backward_process.set_pause(True)
++                elif t0 is None and coord.guard_hold:
++                    coord.guard_hold = False
++                    if not self.owner_busy():
++                        coord.backward_process.set_pause(False)
++            except Exception:  # never take the worker down; the child's 5 s cap bounds a stuck pause
++                pass
 diff --git a/dserve-vllm/vllm/entrypoints/serve/finetune/api_router.py b/dserve-vllm/vllm/entrypoints/serve/finetune/api_router.py
 index b112887..ea0fda5 100644
 --- a/dserve-vllm/vllm/entrypoints/serve/finetune/api_router.py
@@ -3295,7 +3535,7 @@ index 2f389ed..0f12d59 100644
      # ``finetune_ft_started`` mirrors the worker coordinator's ft_started flag
      # (flipped by the collective_rpc from POST /start_finetuning, which only
 diff --git a/dserve-vllm/vllm/v1/worker/gpu_model_runner.py b/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
-index d1afade..514066e 100644
+index d1afade..1a0cb68 100644
 --- a/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
 +++ b/dserve-vllm/vllm/v1/worker/gpu_model_runner.py
 @@ -3974,6 +3974,7 @@ class GPUModelRunner(
@@ -3391,7 +3631,29 @@ index d1afade..514066e 100644
              if _idle_release and _idle_coord is not None:
                  _idle_coord.gpu_resume_backward()
                  self._throttle_held = False
-@@ -4571,21 +4576,16 @@ class GPUModelRunner(
+@@ -4511,6 +4516,21 @@ class GPUModelRunner(
+         _ft_slot = -1
+         _ft_t_wall0 = 0.0
+         _ft_t_host0 = 0.0
++        # [pause_on_slow_step_ms] Track this inference step from before its
++        # pause decision until its forward completes on the GPU.
++        _guard_tok = None
++        if (coord is not None and coord.pending_backward
++                and num_tokens_unpadded - int(self._ft_num or 0) > 0
++                and self.vllm_config.finetune_config.pause_on_slow_step_ms > 0
++                and coord.backward_process is not None):
++            if getattr(self, "_ft_slow_guard", None) is None:
++                from vllm.deltaserve.slow_step_guard import SlowStepGuard
++                self._ft_slow_guard = SlowStepGuard(
++                    coord,
++                    self.vllm_config.finetune_config.pause_on_slow_step_ms / 1e3,
++                    owner_busy=lambda: (getattr(self, "_ft_resume_evt", None) is not None
++                                        or getattr(self, "_throttle_held", False)))
++            _guard_tok = self._ft_slow_guard.begin()
+         if _ft_time_step:
+             if getattr(self, "_ft_timing_events", None) is None:
+                 _RING = 4  # > batch-queue depth (2) so a reused slot is settled
+@@ -4571,21 +4591,16 @@ class GPUModelRunner(
              if _feats is not None and (
                      coord.pending_backward
                      or self.vllm_config.finetune_config.pause_prefill_always):
@@ -3422,7 +3684,20 @@ index d1afade..514066e 100644
                  _pause_bwd = _pause_prefill or _pause_throttle
              # Cross-step throttle release: if a previous step left the
              # bwd paused for throttle reasons and this step's total has
-@@ -4859,10 +4859,12 @@ class GPUModelRunner(
+@@ -4708,6 +4723,12 @@ class GPUModelRunner(
+                             raise
+             _forward_ok = not _ft_aborted
+         finally:
++            if _guard_tok is not None:
++                _guard_ev = None
++                if _forward_ok:
++                    _guard_ev = torch.cuda.Event()
++                    _guard_ev.record()
++                self._ft_slow_guard.end(_guard_tok, _guard_ev)
+             # [Phase 4] Record the end event into the ring slot (no synchronize
+             # — the duration is read RING steps later, off the hot path). Only
+             # commit the slot on a clean forward so a failed step isn't drained.
+@@ -4859,10 +4880,12 @@ class GPUModelRunner(
                              # counts to the EngineCore scheduler, which owns the
                              # trigger decision (it has the corpus/min_sample_len).
                              self._ft_relay_saved = (
@@ -3437,7 +3712,7 @@ index d1afade..514066e 100644
  
                  sample_hidden_states = hidden_states[logits_indices]
                  logits = self.model.compute_logits(sample_hidden_states)
-@@ -4966,7 +4968,11 @@ class GPUModelRunner(
+@@ -4966,7 +4989,11 @@ class GPUModelRunner(
          ev = getattr(self, "_ft_resume_evt", None)
          if ev is not None and ev.query():
              self._ft_resume_evt = None
@@ -5735,6 +6010,130 @@ index 0000000..48bbc30
 +
 +if __name__ == '__main__':
 +    unittest.main()
+diff --git a/tests/test_slow_step_guard.py b/tests/test_slow_step_guard.py
+new file mode 100644
+index 0000000..220ade0
+--- /dev/null
++++ b/tests/test_slow_step_guard.py
+@@ -0,0 +1,118 @@
++#!/usr/bin/env python
++"""pause_on_slow_step_ms: SlowStepGuard pauses the child while a step is late.
++
++GPU (one device). A fake backward process records set_pause calls; a "step" is a
++torch.cuda._sleep kernel with an event behind it. Checks: a fast step never
++pauses; a slow step pauses after the threshold and releases once it completes;
++the hold blocks the coordinator's other resumes; a busy owner keeps the child
++paused on release; a dispatch with no event (failed forward) is dropped.
++
++    python tests/test_slow_step_guard.py
++"""
++import time
++
++import torch
++
++from vllm.deltaserve.coordinator import FinetuneCoordinator
++from vllm.deltaserve.slow_step_guard import SlowStepGuard
++
++PASS = FAIL = 0
++
++
++def check(name, ok, detail=""):
++    global PASS, FAIL
++    PASS += bool(ok)
++    FAIL += not ok
++    print(f"  [{'ok' if ok else 'FAIL'}] {name} {detail}")
++
++
++class FakeBwd:
++    def __init__(self):
++        self.paused = False
++        self.calls = []
++
++    def set_pause(self, p):
++        self.paused = p
++        self.calls.append((time.perf_counter(), p))
++
++
++def cycles_per_ms():
++    s, e = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
++    s.record()
++    torch.cuda._sleep(10_000_000)
++    e.record()
++    e.synchronize()
++    return 10_000_000 / s.elapsed_time(e)
++
++
++def step(guard, ms, cpm):
++    tok = guard.begin()
++    torch.cuda._sleep(int(ms * cpm))
++    ev = torch.cuda.Event()
++    ev.record()
++    guard.end(tok, ev)
++    return ev
++
++
++def setup(busy=lambda: False):
++    coord = FinetuneCoordinator(16)
++    coord.backward_process = FakeBwd()
++    return coord, SlowStepGuard(coord, 0.05, owner_busy=busy)
++
++
++def main():
++    cycles_per_ms()  # warm up
++    cpm = cycles_per_ms()
++    print("fast step (10 ms, threshold 50 ms):")
++    coord, g = setup()
++    step(g, 10, cpm).synchronize()
++    time.sleep(0.03)
++    check("never paused", not coord.backward_process.calls and g.triggers == 0)
++
++    print("slow step (300 ms):")
++    coord, g = setup()
++    t0 = time.perf_counter()
++    ev = step(g, 300, cpm)
++    time.sleep(0.15)
++    check("step still running at 150 ms", not ev.query())
++    bwd = coord.backward_process
++    first = next((t for t, p in bwd.calls if p), None)
++    check("paused after the threshold", first is not None and 0.045 < first - t0 < 0.08,
++          f"at {1e3 * (first - t0):.0f} ms" if first else "")
++    check("hold set", coord.guard_hold and bwd.paused and g.triggers == 1)
++    coord.gpu_resume_backward()
++    check("other resume blocked while held", bwd.paused)
++    ev.synchronize()
++    time.sleep(0.02)
++    check("released after completion", not coord.guard_hold and not bwd.paused)
++    coord.gpu_resume_backward()
++    check("resume works again", not bwd.paused)
++
++    print("release with a busy owner:")
++    busy = [True]
++    coord, g = setup(lambda: busy[0])
++    step(g, 150, cpm).synchronize()
++    time.sleep(0.02)
++    check("hold dropped, child stays paused", not coord.guard_hold and coord.backward_process.paused)
++
++    print("failed forward (no event):")
++    coord, g = setup()
++    tok = g.begin()
++    g.end(tok, None)
++    time.sleep(0.08)
++    check("dropped, never paused", not coord.backward_process.calls)
++
++    print("in-flight dispatch counts as late:")
++    coord, g = setup()
++    tok = g.begin()
++    time.sleep(0.08)
++    check("pending dispatch pauses", coord.backward_process.paused)
++    g.end(tok, None)
++    time.sleep(0.02)
++    check("released", not coord.backward_process.paused)
++    print(f"\n{PASS} passed, {FAIL} failed")
++    raise SystemExit(1 if FAIL else 0)
++
++
++if __name__ == "__main__":
++    main()
 diff --git a/tests/test_tp_bucket_optional_lora.py b/tests/test_tp_bucket_optional_lora.py
 new file mode 100644
 index 0000000..262a8af

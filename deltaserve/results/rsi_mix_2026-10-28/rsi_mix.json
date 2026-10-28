@@ -117,6 +117,45 @@
    },
    "ft_share_during_traffic": 0.412
   },
+  "coguard": {
+   "requests": 765,
+   "ok": 765,
+   "latency_p50_p90_p99": [
+    2.774,
+    5.641,
+    9.496
+   ],
+   "latency_mean": 3.298,
+   "held": 0,
+   "held_wait_mean": 0,
+   "ttft_ms_p50_p99": [
+    50.0,
+    472.0
+   ],
+   "tbt_max_ms_p50_p99": [
+    78.0,
+    294.0
+   ],
+   "tbt_mean_ms_p50": 9.0,
+   "task_p50_p90": [
+    42.751,
+    229.221
+   ],
+   "round_wait_s": [
+    95.2,
+    83.1,
+    88.8,
+    85.9
+   ],
+   "round_wait_mean": 88.2,
+   "all_rounds_done_at": 655.9,
+   "ft_tokens_during_traffic": 923169,
+   "correct": {
+    "finer": "139/510",
+    "formula": "182/255"
+   },
+   "ft_share_during_traffic": 0.43
+  },
   "coloose": {
    "requests": 727,
    "ok": 727,
@@ -354,6 +393,45 @@
    },
    "ft_share_during_traffic": 0.446
   },
+  "cofastb": {
+   "requests": 1500,
+   "ok": 1500,
+   "latency_p50_p90_p99": [
+    2.86,
+    9.276,
+    16.771
+   ],
+   "latency_mean": 4.061,
+   "held": 0,
+   "held_wait_mean": 0,
+   "ttft_ms_p50_p99": [
+    52.0,
+    1138.0
+   ],
+   "tbt_max_ms_p50_p99": [
+    80.0,
+    1156.0
+   ],
+   "tbt_mean_ms_p50": 9.6,
+   "task_p50_p90": [
+    44.082,
+    218.519
+   ],
+   "round_wait_s": [
+    74.1,
+    68.2,
+    70.4,
+    68.9
+   ],
+   "round_wait_mean": 70.4,
+   "all_rounds_done_at": 638.9,
+   "ft_tokens_during_traffic": 923169,
+   "correct": {
+    "finer": "271/1000",
+    "formula": "346/500"
+   },
+   "ft_share_during_traffic": 0.447
+  },
   "cofix": {
    "requests": 1459,
    "ok": 1459,
@@ -392,6 +470,45 @@
     "formula": "335/487"
    },
    "ft_share_during_traffic": 0.429
+  },
+  "coguard": {
+   "requests": 1500,
+   "ok": 1500,
+   "latency_p50_p90_p99": [
+    2.964,
+    6.577,
+    10.771
+   ],
+   "latency_mean": 3.632,
+   "held": 0,
+   "held_wait_mean": 0,
+   "ttft_ms_p50_p99": [
+    53.0,
+    461.0
+   ],
+   "tbt_max_ms_p50_p99": [
+    79.0,
+    364.0
+   ],
+   "tbt_mean_ms_p50": 9.6,
+   "task_p50_p90": [
+    40.186,
+    195.719
+   ],
+   "round_wait_s": [
+    79.6,
+    83.3,
+    85.9,
+    78.0
+   ],
+   "round_wait_mean": 81.7,
+   "all_rounds_done_at": 648.0,
+   "ft_tokens_during_traffic": 923169,
+   "correct": {
+    "finer": "277/1000",
+    "formula": "347/500"
+   },
+   "ft_share_during_traffic": 0.446
   },
   "coloose": {
    "requests": 1483,

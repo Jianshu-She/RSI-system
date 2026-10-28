@@ -450,7 +450,8 @@ GPUs?
 
 - vs vLLM + torchtune: the new data is in the adapter 34-42 % sooner, request p99 and TTFT p99 are ~half, agent
   tasks finish as fast (1 rps) or 41 % faster (2 rps), with one copy of the weights instead of two. The one metric
-  it loses is the worst token gap at 2 rps (max-TBT p99 1.5 s vs 1.2 s).
+  it loses is the worst token gap at 2 rps (max-TBT p99 1.5 s vs 1.2 s) -- inside run-to-run noise, and removed by
+  the slow-step guard (§7.1: 0.36 s).
 - vs stopping serving: the same turnaround (70-74 s vs 70-72 s) without holding anyone: request p99 13-18 s instead
   of 71-74 s.
 - accuracy is the same everywhere (all traffic is served by the base model while the adapter trains).
@@ -486,6 +487,91 @@ vs strict fp32: cosine >= 0.99993).
 Caveats: single runs. GPU 2 of the node thermal-throttled to half speed from 2026-10-26 ~17:00 on, so every cell
 after that ran on GPUs 4-7; cells hit by it, and the failed MPS attempts, are kept out of the table (see
 `DeltaServe-vLLM/EXPERIMENTS.md`, rsi-mix). `cofix_r2` overlapped another job on GPUs 0-3 of the same node.
+
+### 7.1 The slow-step guard, and run-to-run noise (`coguard`, `cofastb`)
+
+The step trace of `cofast` at 2 rps showed where its token-gap tail came from: while the backward ran, decode steps
+took 20 ms at the median but ~0.5 % of them stalled 0.3-1.2 s (predicted: 9 ms), and dozens of requests shared each
+stall. Those decode steps never paused the backward child (`cofast` pauses it only for prefills of >= 4096 tokens),
+so they time-sliced against the four ranks' backward. New flag `finetune.pause_on_slow_step_ms` (default off,
+`deltaserve/slow_step_guard.py`): a watchdog on each rank pauses the backward when an inference step issued during a
+backward is still unfinished after 80 ms, and resumes it when no such step is left; the existing rank-symmetric pause
+stops all four ranks at the same boundary.
+
+| rps | system | request p50 / p90 / p99 | TTFT p99 | max-TBT p50 / p99 | agent task p50 / p90 | round wait |
+|---|---|---|---|---|---|---|
+| 1 | DeltaServe (`cofast`) | 2.70 / 8.2 / 13.3 s | 819 ms | 28 / 1079 ms | 61 / 181 s | 74 s |
+| 1 | **DeltaServe + guard** | 2.77 / **5.6 / 9.5 s** | **472 ms** | 78 / **294 ms** | **43** / 229 s | 88 s |
+| 1 | vLLM + torchtune | 2.87 / 11.9 / 23.5 s | 1618 ms | 72 / 1191 ms | 60 / 258 s | 112 s |
+| 2 | DeltaServe (`cofast`) | 2.87 / 9.0 / 17.5 s | 1114 ms | 80 / 1517 ms | 43 / 210 s | 70.5 s |
+| 2 | DeltaServe (`cofast`, repeat) | 2.86 / 9.3 / 16.8 s | 1138 ms | 80 / 1156 ms | 44 / 219 s | 70.4 s |
+| 2 | **DeltaServe + guard** | 2.96 / **6.6 / 10.8 s** | **461 ms** | 79 / **364 ms** | **40 / 196 s** | 82 s |
+| 2 | vLLM + torchtune | 3.40 / 16.8 / 29.9 s | 1906 ms | 88 / 1191 ms | 73 / 267 s | 121 s |
+
+- The guard removes the stalls: decode steps over 0.3 s go from 45 to 0 (max 1.16 -> 0.30 s); max-TBT p99 is 3-4x
+  lower and request p99 ~35 % lower. Cost: rounds take 16-19 % longer (still 22-33 % faster than torchtune).
+- Noise (`cofast` run twice at 2 rps): round wait 70.5 vs 70.4 s, request p99 +-4 %, but max-TBT p99 +-25 % (1517
+  vs 1156 ms): a p99 of per-request maxima rests on a handful of stalls. The earlier "loss" to torchtune on that
+  metric (1517 vs 1191) was inside this noise; the guard's 294-364 ms is far outside it.
+- Max-TBT p50 at 1 rps rises 28 -> 78 ms without any step getting slower: per-request max-TBT is either ~25 ms (the
+  request met no FT-carrying step) or 80-160 ms (it met one), and with training spread over more of the run the share
+  of requests meeting one crossed 50 % (47 -> 56 %), while the number of > 60 ms gaps per request fell (3.4 -> 2.4).
+- With the guard DeltaServe beats vLLM + torchtune on every metric above except max-TBT p50 at 1 rps (78 vs 72 ms).
+
+## 8. The trace's real bursty timeline (`scripts/trace_replay.py` + `rsi_mix_v5.sh REPLAY_OPEN=1`; `rsi_burst_2026-10-28/`)
+
+**Why:** every run in §5-§7 started TraceLab sessions as a Poisson process. At 1-2 rps that stacks dozens of sessions,
+and the traffic comes out Poisson-like: measured on those runs, the 10 s-window CV is 0.33-0.52, inter-arrival CV
+1.0-1.26, and no 10 s window is idle. The trace itself (140K Claude requests over 243 days; the paper publishes no
+arrival statistics) is very bursty: in hours with >= 100 requests, the 10 s-window CV is 1.81, 70 % of 10 s windows
+are idle, and the peak is 10x the mean (hours with >= 20 requests: 2.69, 84 %, 16x). Agentic traffic being bursty is
+the premise of co-serving, so we replay the real timeline instead.
+
+**Workload:** `trace_replay.py` takes every Claude round's real start time in one window of wall clock and compresses
+it into 750 s, sent open-loop (each round at its own time; a closed loop flattens the bursts, CV 1.88 -> 0.6, because
+the window holds ~10 sessions with one request in flight each). The window is the median-CV one among windows with
+~1125 requests, not the burstiest. Two windows:
+
+| load | window | requests | sessions | mean rate | 10 s-window CV | idle 10 s windows | peak / mean |
+|---|---|---|---|---|---|---|---|
+| r1 | 24 h from 2026-03-06 15:30 UTC, 115x | 862 | 10 | 1.15 rps | 1.88 | 55 % | 9.3x |
+| r2 | 12 h from 2026-05-31 20:30 UTC, 58x | 1336 | 18 | 1.78 rps | 1.26 | 29 % | 7.0x |
+
+Requests, FT rounds (4 x ~230K tokens at 120 / 270 / 420 / 570 s) and the three systems are as in §7; DeltaServe runs
+with the slow-step guard (§7.1).
+
+| load | system | request p50 / p90 / p99 | held | TTFT p50 / p99 | max-TBT p99 | agent task p50 / p90 | round wait |
+|---|---|---|---|---|---|---|---|
+| r1 | seq (stop serving) | **3.58 / 5.95** / 29.3 s | 73 | 75 / 754 ms | **282 ms** | **6.6** / 30.6 s | **40.5 s** |
+| r1 | **DeltaServe** | 3.94 / 7.90 / **12.7 s** | 0 | 105 / **558 ms** | 331 ms | 9.6 / **28.8 s** | 55.1 s |
+| r1 | vLLM + torchtune | 23.6 / 63.9 / 78.6 s | 0 | 802 / 3784 ms | 1962 ms | 36.2 / 82.1 s | 93.4 s |
+| r2 | seq (stop serving) | **3.59** / 38.8 / 49.4 s | 418 | 70 / 2753 ms | 576 ms | 9.7 / 46.9 s | **42.6 s** |
+| r2 | **DeltaServe** | 3.91 / **11.8 / 18.3 s** | 0 | 70 / **662 ms** | **506 ms** | **7.2 / 27.9 s** | 60.7 s |
+| r2 | vLLM + torchtune | 17.5 / 99.0 / 130.6 s | 0 | 480 / 4069 ms | 1884 ms | 25.9 / 76.7 s | 104.8 s |
+
+- **vs vLLM + torchtune:** bursts are where sharing the GPU with a separate trainer breaks. Its request p50 goes
+  from 3.4 s (Poisson, §7) to 17-24 s; DeltaServe's request p99 is 6-7x lower, TTFT p99 6-7x lower, and each round
+  is trained 41-42 % sooner.
+- **vs stopping serving:** seq trains fastest (rounds 30-36 % shorter) because it holds users while it trains. At
+  r1 the valleys are long, a 40 s round holds only 73 requests, and seq has the best medians; DeltaServe still has
+  2.3x lower request p99 and never holds anyone. At r2, seq holds 418 requests, and DeltaServe wins every latency
+  metric and the agent tasks (task p90 -40 %).
+- Where DeltaServe's rounds lose time: rounds that overlap traffic (r1 rounds 0-2: 46-73 requests arrive during
+  them) stretch the backward cycle 2.4 -> 3.5-3.9 s; a round with no traffic (r1 round 3) trains as fast as seq
+  (39.8 vs 39.4 s).
+- Accuracy is the same everywhere (366 / 368 / 374 of 862; 565 / 551 / 562 of 1336).
+
+![Fig 8a](rsi_burst_2026-10-28/fig_mix_r1.png)
+**Fig 8a.** r1 (24 h window). Requests come in bursts with long quiet stretches. vLLM + torchtune (purple) leaves
+users waiting 20-100 s in the bursts after round 3 starts, while its training also falls behind. DeltaServe (yellow)
+stays at a few seconds and trains almost as fast as stopping serving (orange, shaded).
+
+![Fig 8b](rsi_burst_2026-10-28/fig_mix_r2.png)
+**Fig 8b.** r2 (12 h window): denser bursts; stopping serving now holds 418 requests (orange points up to ~50 s).
+
+Caveats: one run per cell (the §7.1 repeat puts run-to-run noise at +-4 % on request p99 and +-25 % on max-TBT
+p99); one window per load; the timeline is compressed 58-115x, which keeps the burst shape but packs each session's
+tool loop tighter than in real time.
 
 ## Caveats
 

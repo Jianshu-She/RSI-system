@@ -382,6 +382,9 @@ class FinetuneCoordinator:
         self.epoch_flush_pending = False
         self.min_sample_len = 1            # set by the scheduler from the store
         self.backward_process = None       # set by the worker
+        # [pause_on_slow_step_ms] set by SlowStepGuard while a late inference
+        # step holds the child paused; every other resume is a no-op meanwhile.
+        self.guard_hold = False
         self.backward_sleep_s = 2.0        # set by the worker from config
         # Current FT corpus epoch (set each step by the scheduler from the store);
         # forwarded to the backward process so it can StepLR per epoch.
@@ -840,7 +843,7 @@ class FinetuneCoordinator:
     def gpu_resume_backward(self) -> None:
         """[Phase 5] Return the GPU to the backward child after the inference
         prefill forward completes."""
-        if self.backward_process is not None:
+        if self.backward_process is not None and not self.guard_hold:
             self.backward_process.set_pause(False)
 
     # A backward that has been outstanding this long (vs ~0.1-0.5 s normally)

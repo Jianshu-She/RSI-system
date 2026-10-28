@@ -4516,6 +4516,21 @@ class GPUModelRunner(
         _ft_slot = -1
         _ft_t_wall0 = 0.0
         _ft_t_host0 = 0.0
+        # [pause_on_slow_step_ms] Track this inference step from before its
+        # pause decision until its forward completes on the GPU.
+        _guard_tok = None
+        if (coord is not None and coord.pending_backward
+                and num_tokens_unpadded - int(self._ft_num or 0) > 0
+                and self.vllm_config.finetune_config.pause_on_slow_step_ms > 0
+                and coord.backward_process is not None):
+            if getattr(self, "_ft_slow_guard", None) is None:
+                from vllm.deltaserve.slow_step_guard import SlowStepGuard
+                self._ft_slow_guard = SlowStepGuard(
+                    coord,
+                    self.vllm_config.finetune_config.pause_on_slow_step_ms / 1e3,
+                    owner_busy=lambda: (getattr(self, "_ft_resume_evt", None) is not None
+                                        or getattr(self, "_throttle_held", False)))
+            _guard_tok = self._ft_slow_guard.begin()
         if _ft_time_step:
             if getattr(self, "_ft_timing_events", None) is None:
                 _RING = 4  # > batch-queue depth (2) so a reused slot is settled
@@ -4708,6 +4723,12 @@ class GPUModelRunner(
                             raise
             _forward_ok = not _ft_aborted
         finally:
+            if _guard_tok is not None:
+                _guard_ev = None
+                if _forward_ok:
+                    _guard_ev = torch.cuda.Event()
+                    _guard_ev.record()
+                self._ft_slow_guard.end(_guard_tok, _guard_ev)
             # [Phase 4] Record the end event into the ring slot (no synchronize
             # — the duration is read RING steps later, off the hot path). Only
             # commit the slot on a clean forward so a failed step isn't drained.

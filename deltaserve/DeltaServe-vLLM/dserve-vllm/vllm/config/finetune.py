@@ -541,6 +541,16 @@ class FinetuneConfig:
     (rsi-mix, 2026-10-26). The decision reads only the scheduler's step
     features, so it is identical on every TP rank."""
 
+    pause_on_slow_step_ms: float = 0.0
+    """Slow-step guard (0 = off). A per-rank watchdog pauses the backward child
+    when an inference step dispatched while a backward is outstanding has not
+    completed on the GPU after this many ms, and releases it once every such
+    step has completed. Without MPS a decode step time-sliced against the child
+    usually costs ~2x (20 ms vs 9 ms), but ~0.5 % of them stall 0.3-1.2 s
+    (Qwen3-32B TP=4, rsi-mix 2 rps), which sets the max-TBT tail. The pause
+    reaches every rank's child at the same boundary through the existing
+    pause agreement, so a rank-local trigger is safe."""
+
     # --- fwd-token throttle (extends the prefill-gated pause) ---
     fwd_token_throttle_enable: bool = False
     """Master switch for the fwd-token-throttle pause source. When False

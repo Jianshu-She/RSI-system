@@ -856,3 +856,80 @@
 - Decision: for the light single-task e2e loop the right setting is the original admission + the fast backward
   (configs/coserve_e2e_fastbwd.yaml): faster training at unchanged latency. The aggressive §7 admission is for
   heavy mixed traffic, where idle GPU time is scarce.
+
+### rsi-mix-guard — slow-step guard against the max-TBT tail   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7)
+- Audit: rsi-mix final (cofast) beats vLLM+torchtune on 15/18 metrics, ties 2, loses 1: 2 rps max-TBT p99 1517 vs
+  1191 ms. Single run per cell, no variance yet. Step trace of cofast_r2: decode-only steps with a backward in
+  flight (decode_bwd) are p50 20 / p99 100 ms, but ~0.5 % stall 0.3-1.2 s (predicted 9 ms), at random phase of
+  the 4.3 s backward cycle; many requests share one 1.517 s gap. Those steps run unpaused (cofast pauses only for
+  prefills >= 4096 tok), so time-slicing against the 4-rank backward (incl. its spinning NCCL reduces) is the
+  likely cause.
+- Change: finetune.pause_on_slow_step_ms (new, default 0 = off; deltaserve/slow_step_guard.py): a per-rank
+  watchdog pauses the backward child when an inference step dispatched during a backward is still not complete
+  after X ms, released when no such step is in flight; the child's rank-symmetric pause agreement stops all ranks.
+  Gate: tests/test_slow_step_guard.py 12/12 (GPU).
+- Command (work/rsimix14.sh): cofast knobs `TTFT_SLO=1.0 MAX_TBT_SLO=0.3 PHASE=both DECODE_MARGIN=1.0
+  PAUSE_MIN_PREFILL=4096 STALL_BUDGET=0.5 BWD_TF32=1 BWD_SDPA=1 STEP_TRACE=1` + `SLOW_GUARD_MS=80`,
+  scripts/rsi_mix_v4.sh co 4,5,6,7 8100 -> coguard_r2, coguard_r1; then a cofast_r2 repeat (cofastb_r2, guard off)
+  for run-to-run noise. Same workload_r{1,2}.json + rounds as rsi-mix.
+- Predicted: coguard_r2 max-TBT p99 <= 400 ms (beats tt 1191), decode_bwd max < 0.3 s; round wait +0-10 %
+  (70.5 -> <= 78 s); request p99 unchanged or better (17.5 s). FALSIFIED if max-TBT p99 stays > 1 s (then the
+  stall is not the child's GPU share, e.g. host-side or NCCL coupling the pause doesn't reach) or round wait > 90 s.
+- Actual coguard_r2 (2 rps, 1500/1500 ok): max-TBT p50/p99 79 / 364 ms (cofast 80 / 1517, tt 88 / 1191); TTFT
+  p50/p99 53 / 461 ms (cofast 52 / 1114, tt 89 / 1906); request p50/p90/p99 2.96 / 6.58 / 10.77 s (cofast 2.87 /
+  8.98 / 17.53, tt 3.40 / 16.8 / 29.9); agent task p50/p90 40 / 196 s (cofast 43 / 210, tt 73 / 267); round wait
+  79.6, 83.3, 85.9, 78.0 = mean 81.7 s (cofast 70.5, tt 121.1); correct 347/500 + 277/1000. decode_bwd steps p99
+  36 ms, max 0.299 s, 0 over 0.3 s (cofast p99 100 ms, max 1.16 s, 45 over 0.3 s). Predictions: max-TBT <= 400
+  PASS, decode max < 0.3 s PASS, request p99 not worse PASS (better), round wait <= 78 s FAIL (81.7, +16 %).
+  Now beats tt on every 2 rps metric. Single run; coguard_r1 + cofastb_r2 (noise) still running.
+
+### rsi-burst — main comparison on the trace's REAL bursty timeline   (2026-10-28, fs-mbz-gpu-198 GPUs 4-7)
+- Audit: every rsi-mix / rsi-tracelab run used agent_trace.py: real per-session gaps, but sessions start as a Poisson
+  process; at 1-2 rps dozens of sessions overlap and the traffic is Poisson-like (measured on the runs: 10 s-window
+  CV 0.33-0.52, inter-arrival CV 1.0-1.26, 0 % idle windows). The TraceLab trace itself (140K Claude requests, 243
+  days) is very bursty: in hours with >= 100 req, 10 s-window CV 1.81, 70 % idle windows, peak 10x mean (>= 20 req/h:
+  2.69, 84 %, 16x). The paper reports no arrival-process statistics. Our claim (agent traffic is bursty; co-serving
+  trains in the valleys) was therefore never tested. MMPP session arrivals (agent_trace.py --arrival mmpp) did not
+  reach the trace's statistics (CV <= 1.6, idle <= 27 %: overlapping sessions fill the gaps); a closed-loop replay of
+  the real timeline flattens it too (CV 1.88 -> 0.6: ~10 sessions, one request in flight each).
+- Workload: scripts/trace_replay.py --hours 24 --requests 1125 --duration 750 -> the real request timeline of a 24 h
+  window (median-CV window of 462 candidates, start 2026-03-06 15:30 UTC, 10 sessions, 862 requests), compressed
+  115x into 750 s and replayed OPEN-LOOP (rsi_traffic.py --replay-open): 1.15 rps mean, 10 s-window CV 1.88, 55 %
+  idle windows, peak 9.3x mean. Second workload: --hours 12 (1336 req, 1.78 rps, CV 1.26, 29 % idle, peak 7x).
+  Request content, FT rounds (4 x ~230K tok at 120/270/420/570 s) and metrics as rsi-mix.
+- Cells (work/rsiburst.sh, scripts/rsi_mix_v5.sh, runs/rsiburst/<cell>_r<1|2>, r1 = 24 h, r2 = 12 h): coguard
+  (cofast knobs + SLOW_GUARD_MS=80), tt (vLLM + torchtune, time-sliced), seq (stop serving to train, fast backward).
+- Predicted (24 h): co round wait <= 75 s (more valleys than Poisson 2 rps: 81.7) and request p99 < tt's by >= 30 %;
+  tt TTFT p99 > 2 s in the bursts; seq holds a burst whenever a round lands in one (request p99 > 60 s). FALSIFIED
+  if co's round wait is not below tt's, or co's request p99 is worse than tt's.
+- Actual coguard_r1 (1 rps): max-TBT p50/p99 78 / 294 ms (cofast 28 / 1079, tt 72 / 1191); TTFT p99 472 (cofast
+  819, tt 1618); request p50/p90/p99 2.77 / 5.64 / 9.50 s (cofast 2.70 / 8.21 / 13.26, tt 2.87 / 11.9 / 23.5);
+  agent task p50/p90 43 / 229 s (cofast 61 / 181, tt 60 / 258); round wait mean 88.2 s (cofast 74.1, tt 112.2).
+  decode_bwd max 0.29 s (cofast 1.07). The max-TBT p50 jump 28 -> 78 ms is a bimodality artifact, not slower steps:
+  per-request max-TBT is ~25 ms (no slow step met) or ~80-160 ms (met an FT-carrying mixed step, ~157 ms p50 in
+  both runs); requests meeting >= 1 gap > 60 ms went 47 % -> 56 % (training spans more of the run: round wait +19 %)
+  while gaps > 60 ms per request fell 3.43 -> 2.38. Cost of the guard at both rates: round wait +16-19 %.
+- Actual cofastb_r2 (cofast repeat, guard off, 2 rps): round wait 74.1, 68.2, 70.4, 68.9 = 70.4 s (run 1: 70.5);
+  request p50/p90/p99 2.86 / 9.28 / 16.77 s (2.87 / 8.98 / 17.53); TTFT p99 1138 (1114); max-TBT p99 1156 (1517);
+  correct 346 + 271 (345 + 271). Run-to-run noise: round wait +-0.1 s, request p99 +-4 %, but max-TBT p99 +-25 %
+  (a p99 of per-request maxima set by a handful of 1 s stalls) -- the original 1517-vs-1191 "loss" to tt was inside
+  that noise; coguard's 364 ms is far outside it.
+- Decision: the guard removes the decode stalls (max-TBT p99 3-4x lower, request p99 -35 %) for +16-19 % round wait,
+  still 22-33 % below tt. Keep it on (SLOW_GUARD_MS=80) for the bursty main comparison (rsi-burst).
+- Actual r1 (24 h window, 862 req, 0 errors in all three): request p50/p90/p99 seq 3.58 / 5.95 / 29.3 s (73 held),
+  coguard 3.94 / 7.90 / 12.7 s (0 held), tt 23.6 / 63.9 / 78.6 s; TTFT p99 754 / 558 / 3784 ms; max-TBT p99 282 /
+  331 / 1962 ms; agent task p50/p90 6.6 / 30.6, 9.6 / 28.8, 36.2 / 82.1 s; round wait mean 40.5 / 55.1 / 93.4 s;
+  correct 366 / 368 / 374 of 862. Predictions: co round wait <= 75 PASS (55.1); co request p99 >= 30 % below tt
+  PASS (-84 %); tt TTFT p99 > 2 s PASS (3.8); seq request p99 > 60 s FAIL (29.3: the valleys are long enough that
+  a 40 s seq round holds only 73 requests). Not falsified vs tt; but seq is strong here: fastest rounds (40.5 vs
+  55.1) and best median latency / task p50; co wins only the tails (request p99 2.3x, TTFT p99, task p90, 0 held).
+- Decision: report honestly -- under bursty traffic co-serving dominates the shared-GPU baseline (tt) and trades
+  ~36 % slower rounds vs seq for never blocking users. Checked: rounds 0-2 do NOT sit in valleys -- 73 / 46 /
+  59 requests arrive during them (mean 12 / 3.5 / 7 in flight); backward cycles stretch 2.4 s -> 3.5-3.9 s (+50-60 %)
+  while sharing the GPU, even at 3.5 requests in flight. Round 3 has no traffic and matches seq (39.8 vs 39.4 s).
+  So the gap to seq is the price of serving during training, not a scheduler bug in the valleys.
+- Actual r2 (12 h window, 1336 req, 0 errors): request p50/p90/p99 seq 3.59 / 38.8 / 49.4 s (418 held), coguard
+  3.91 / 11.8 / 18.3 s (0 held), tt 17.5 / 99.0 / 130.6 s; TTFT p99 2753 / 662 / 4069 ms; max-TBT p99 576 / 506 /
+  1884 ms; agent task p50/p90 9.7 / 46.9, 7.2 / 27.9, 25.9 / 76.7 s; round wait mean 42.6 / 60.7 / 104.8 s; correct
+  565 / 551 / 562 of 1336. At this denser load co beats seq on every latency metric and on agent tasks (p90 -40 %);
+  seq still has the fastest rounds (-30 %). tt is last everywhere (rounds +73 % vs co, request p99 7x).

@@ -8,7 +8,9 @@ Samples real Claude Code sessions from the released DuckDB and keeps, per LLM ro
             (user-initiated round), measured from the round timestamps; capped at --human-cap / --tool-cap s (a
             "tool" gap of an hour is a person away from a pending permission prompt, not a tool)
   kind    = "tool" | "user"; a *task* is one user request = a user round + the tool loop that follows it
-Sessions arrive as a Poisson process (the paper releases no arrival process; csv_export does the same).
+Sessions arrive as a Poisson process (the paper releases no arrival process; csv_export does the same), or with
+--arrival mmpp as an on/off Markov-modulated Poisson process with the same mean rate: bursts of mean --burst-on s
+at a high rate alternate with quiet spells of mean --burst-off s at --burst-off-frac x the mean rate.
 Each session is cut at its first --max-tasks user tasks and --max-rounds rounds (whole tasks only).
 
   python agent_trace.py --db syfi_coding_trace.duckdb --sessions 32 --rate 0.035 --out agent_workload.json
@@ -28,6 +30,31 @@ select r.*, t.t0, t.t1 from r join t using (round_pk) order by session_id, round
 """
 
 
+def arrivals(a, rng, n):
+    """n session start times: Poisson at a.rate, or on/off MMPP with the same mean rate."""
+    if a.arrival == "poisson":
+        out, t = [], 0.0
+        for _ in range(n):
+            out.append(t)
+            t += rng.expovariate(a.rate)
+        return out
+    r_off = a.rate * a.burst_off_frac
+    r_on = (a.rate * (a.burst_on + a.burst_off) - r_off * a.burst_off) / a.burst_on
+    out, t, on = [0.0], 0.0, True   # start in a burst; the first session opens it
+    while len(out) < n:
+        end = t + rng.expovariate(1 / (a.burst_on if on else a.burst_off))
+        while len(out) < n:
+            r = r_on if on else r_off
+            if r <= 0:
+                break
+            t += rng.expovariate(r)   # memoryless: restart at each state change
+            if t >= end:
+                break
+            out.append(t)
+        t, on = end, not on
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)
@@ -39,6 +66,10 @@ def main():
     ap.add_argument("--max-tasks", type=int, default=4)
     ap.add_argument("--max-rounds", type=int, default=80)
     ap.add_argument("--max-output", type=int, default=4096)
+    ap.add_argument("--arrival", choices=["poisson", "mmpp"], default="poisson")
+    ap.add_argument("--burst-on", type=float, default=45.0, help="mmpp: mean burst length, s (exponential)")
+    ap.add_argument("--burst-off", type=float, default=105.0, help="mmpp: mean quiet length, s (exponential)")
+    ap.add_argument("--burst-off-frac", type=float, default=0.05, help="mmpp: quiet rate / mean rate")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -69,11 +100,9 @@ def main():
             sess.append({"trace_session": str(sid), "prefix0": int(g.p.iloc[0] * a.scale), "rounds": rounds})
     rng = random.Random(a.seed)
     pick = rng.sample(sess, a.sessions)
-    t = 0.0
-    for i, s in enumerate(pick):
+    for i, (s, t) in enumerate(zip(pick, arrivals(a, rng, len(pick)))):
         s["id"] = i
         s["arrival"] = round(t, 3)
-        t += rng.expovariate(a.rate)
     rs = [r for s in pick for r in s["rounds"]]
     hw = [r["wait"] for r in rs if r["kind"] == "user" and r["wait"] > 0]
     tw = [r["wait"] for r in rs if r["kind"] == "tool"]
@@ -84,6 +113,9 @@ def main():
             "tool_wait_p50_p90_p99": [round(float(np.percentile(tw, q)), 2) for q in (50, 90, 99)] if tw else None,
             "human_wait_p50_p90": [round(float(np.percentile(hw, q)), 1) for q in (50, 90)] if hw else None,
             "last_arrival_s": pick[-1]["arrival"]}
+    if a.arrival == "mmpp":
+        meta["mmpp_rates_on_off"] = [round((a.rate * (a.burst_on + a.burst_off) - a.rate * a.burst_off_frac
+                                            * a.burst_off) / a.burst_on, 4), round(a.rate * a.burst_off_frac, 4)]
     json.dump({"meta": meta, "sessions": pick}, open(a.out, "w"), indent=1)
     print(json.dumps(meta, indent=1))
 

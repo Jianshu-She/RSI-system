@@ -19,6 +19,8 @@ trace), correctness, and timing. Run with the ACE venv python from the ACE upstr
   #   sessions arrive at their (Poisson) arrival times; each round waits its real TraceLab gap (tool latency / human
   #   think time), then sends the next ACE request and waits for its answer (closed loop within a session).
   #   Records then also carry session / round / task / kind.
+  #   --replay-open with a trace_replay.py JSON (the trace's real, compressed timeline): every round is sent at its
+  #   own time t without waiting for the previous answer (open-loop trace replay).
   # Mixed traffic: --task formula,finer [--mix 1,2] interleaves the splits in that ratio (each request is scored
   #   with its own task's processor; records carry "task"). --duration also bounds --workload runs.
   # Several FT rounds instead of one job (rsi_mix.sh): --rounds-at 120,270,... --rounds-dir <rsi_mix_prep.py dir>
@@ -121,6 +123,9 @@ async def main():
     ap.add_argument("--train-mode", choices=["co", "seq"], default="co")
     ap.add_argument("--ft-final", default="", help="file whose existence means the FT job is done")
     ap.add_argument("--workload", default="", help="agent_trace.py JSON: TraceLab session timing (open loop only)")
+    ap.add_argument("--replay-open", action="store_true",
+                    help="trace_replay.py JSON: send every round at its own time t, not waiting for the session's "
+                         "previous answer (open-loop replay of the real timeline)")
     ap.add_argument("--mix", default="", help="per-task interleave ratio for --task a,b (default 1 each)")
     ap.add_argument("--rounds-at", default="", help="comma-separated start times (s) of the FT rounds")
     ap.add_argument("--rounds-dir", default="")
@@ -262,12 +267,22 @@ async def main():
                     pass
 
             async def agent_session(w):
+                fired = []   # --replay-open: this session's in-flight requests, awaited however the loop ends
+                try:
+                    await session_rounds(w, fired)
+                finally:
+                    await asyncio.gather(*fired)
+
+            async def session_rounds(w, fired):
                 if args.duration and w["arrival"] > args.duration:
                     return
                 await nap(t_start + w["arrival"] - time.time())
                 task = -1
                 for k, r in enumerate(w["rounds"]):
-                    await nap(r["wait"])
+                    if args.replay_open:
+                        await nap(t_start + r["t"] - time.time())
+                    else:
+                        await nap(r["wait"])
                     if args.duration and time.time() - t_start > args.duration:
                         return
                     i = None if used_up.is_set() else next(nxt, None)
@@ -276,8 +291,12 @@ async def main():
                     if i == len(samples) - 1:
                         used_up.set()
                     task += r["kind"] == "user"
-                    await one(client, args, procs[i], playbook, i, samples[i], out, lock, stats,
+                    req = one(client, args, procs[i], playbook, i, samples[i], out, lock, stats,
                               {"session": w["id"], "round": k, "agent_task": task, "kind": r["kind"]})
+                    if args.replay_open:
+                        fired.append(asyncio.create_task(req))
+                    else:
+                        await req
             await asyncio.gather(*(agent_session(w) for w in json.load(open(args.workload))["sessions"]))
         else:
             rng = random.Random(args.seed)
