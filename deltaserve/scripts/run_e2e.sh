@@ -6,7 +6,7 @@
 #   C  co-serving     : the same traffic as A while the LoRA trains in the gaps   -> latency under training; final/ adapter
 #   D  eval           : the exported adapter with the ACE protocol (stock vLLM 0.31 on EVAL_GPU) + paired test vs base
 # Usage (on an 8-GPU node, after setup.sh):   bash deltaserve/scripts/run_e2e.sh [run_name]
-# Knobs (env): RPS (0.5)  B_CONCURRENCY (16)  DS_GPUS (0,1,2,3)  EVAL_GPU (4)  PLAYBOOK  SKIP_BASE_EVAL=1  SKIP_EVAL=1 (no phase D)
+# Knobs (env): CONFIG (configs/coserve_e2e.yaml; coserve_e2e_fast.yaml = the RESULTS §7 co-serving changes)  RPS (0.5)  B_CONCURRENCY (16)  DS_GPUS (0,1,2,3)  EVAL_GPU (4)  PLAYBOOK  SKIP_BASE_EVAL=1  SKIP_EVAL=1 (no phase D)
 set -u
 source "$(dirname "$(readlink -f "$0")")/../env.sh"; ds_activate
 RUN=$DS_WORK/runs/${1:-e2e_$(date +%Y%m%d_%H%M%S)}; mkdir -p $RUN; rm -rf $RUN/adapters
@@ -17,7 +17,7 @@ T() { echo "=== $(date '+%F %T') $*" | tee -a $RUN/driver.log; }
 [ -f "$DS_INIT_ADAPTER/adapter_model.safetensors" ] || { echo "no $DS_INIT_ADAPTER: run deltaserve/scripts/setup.sh"; exit 1; }
 sed -e "s#__INIT_ADAPTER__#$DS_INIT_ADAPTER#g" -e "s#__SAVE_DIR__#$RUN/adapters#" -e "s#__BWD_LOG__#$RUN/bwd.csv#" \
     -e "s#__MODEL_DIR__#$MODEL_DIR#" -e "s#__TP__#$TP#" -e "s#^  port: 8000#  port: $DS_PORT#" \
-    $DS_HOME/configs/coserve_e2e.yaml > $RUN/config.yaml
+    ${CONFIG:-$DS_HOME/configs/coserve_e2e.yaml} > $RUN/config.yaml
 traffic() { (cd $ACE_UPSTREAM_DIR && $ACE_PY $DS_HOME/scripts/rsi_traffic.py --url $URL/v1 --model $DS_MODEL_NAME "$@"); }
 
 T "start DeltaServe on GPUs $DS_GPUS (TP=$TP); first launch compiles for 10+ min"

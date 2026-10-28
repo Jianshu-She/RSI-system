@@ -1,0 +1,247 @@
+{
+ "task": "formula",
+ "split": "test",
+ "context": "/mnt/weka/home/jianshu.she/.cache/rsi-push/RSI-system/deltaserve/configs/empty_context.txt",
+ "model": "rsi",
+ "results": {
+  "accuracy": 0.77,
+  "correct": 154,
+  "total": 200,
+  "no_answer": 0
+ },
+ "errors": {
+  "accuracy": 0.77,
+  "errors": [
+   {
+    "index": 14,
+    "prediction": "0.48",
+    "ground_truth": "0.47"
+   },
+   {
+    "index": 2,
+    "prediction": "5.0",
+    "ground_truth": "0.05"
+   },
+   {
+    "index": 3,
+    "prediction": "8.45",
+    "ground_truth": "18.45"
+   },
+   {
+    "index": 6,
+    "prediction": "637.05",
+    "ground_truth": "637.07"
+   },
+   {
+    "index": 19,
+    "prediction": "82209.07",
+    "ground_truth": "89606.94"
+   },
+   {
+    "index": 30,
+    "prediction": "300.0",
+    "ground_truth": "3.0"
+   },
+   {
+    "index": 33,
+    "prediction": "16.0",
+    "ground_truth": "0.16"
+   },
+   {
+    "index": 28,
+    "prediction": "37008.0",
+    "ground_truth": "37161.62"
+   },
+   {
+    "index": 34,
+    "prediction": "0.02",
+    "ground_truth": "94.29"
+   },
+   {
+    "index": 7,
+    "prediction": "10652.58",
+    "ground_truth": "11717.85"
+   },
+   {
+    "index": 40,
+    "prediction": "0.08",
+    "ground_truth": "0.07"
+   },
+   {
+    "index": 29,
+    "prediction": "3.96",
+    "ground_truth": "18.45"
+   },
+   {
+    "index": 37,
+    "prediction": "0.0",
+    "ground_truth": "18.45"
+   },
+   {
+    "index": 42,
+    "prediction": "147643.75",
+    "ground_truth": "147651.39"
+   },
+   {
+    "index": 52,
+    "prediction": "5.0",
+    "ground_truth": "0.05"
+   },
+   {
+    "index": 60,
+    "prediction": "10.0",
+    "ground_truth": "0.1"
+   },
+   {
+    "index": 57,
+    "prediction": "70.39",
+    "ground_truth": "69.49"
+   },
+   {
+    "index": 61,
+    "prediction": "300.0",
+    "ground_truth": "3.0"
+   },
+   {
+    "index": 64,
+    "prediction": "4250.0",
+    "ground_truth": "4250000000000.0"
+   },
+   {
+    "index": 70,
+    "prediction": "100000000.0",
+    "ground_truth": "-100000000.0"
+   },
+   {
+    "index": 74,
+    "prediction": "1.3",
+    "ground_truth": "0.01"
+   },
+   {
+    "index": 68,
+    "prediction": "18738.06",
+    "ground_truth": "18761.26"
+   },
+   {
+    "index": 55,
+    "prediction": "974.51",
+    "ground_truth": "15092.44"
+   },
+   {
+    "index": 78,
+    "prediction": "273000.0",
+    "ground_truth": "343000.0"
+   },
+   {
+    "index": 83,
+    "prediction": "1520.0",
+    "ground_truth": "1520000000000.0"
+   },
+   {
+    "index": 93,
+    "prediction": "3.0",
+    "ground_truth": "0.03"
+   },
+   {
+    "index": 79,
+    "prediction": "0.02",
+    "ground_truth": "0.08"
+   },
+   {
+    "index": 87,
+    "prediction": "136842.11",
+    "ground_truth": "2600000.0"
+   },
+   {
+    "index": 84,
+    "prediction": "The unemployment rate will decrease. For example, if the initial labor force was 1,000,000 and the number of unemployed was 100,000, the unemployment rate would decrease from 10.00% to 9.52%.",
+    "ground_truth": "0.0"
+   },
+   {
+    "index": 109,
+    "prediction": "21.0",
+    "ground_truth": "21000000000.0"
+   },
+   {
+    "index": 104,
+    "prediction": "0.097",
+    "ground_truth": "0.1"
+   },
+   {
+    "index": 116,
+    "prediction": "0.17",
+    "ground_truth": "0.18"
+   },
+   {
+    "index": 122,
+    "prediction": "125487.34",
+    "ground_truth": "125482.47"
+   },
+   {
+    "index": 146,
+    "prediction": "500.0",
+    "ground_truth": "-1499.76"
+   },
+   {
+    "index": 142,
+    "prediction": "11315.67",
+    "ground_truth": "7600.0"
+   },
+   {
+    "index": 162,
+    "prediction": "300.0",
+    "ground_truth": "3.0"
+   },
+   {
+    "index": 172,
+    "prediction": "25.0",
+    "ground_truth": "0.25"
+   },
+   {
+    "index": 165,
+    "prediction": "36.07",
+    "ground_truth": "35.71"
+   },
+   {
+    "index": 152,
+    "prediction": "66666.67",
+    "ground_truth": "9615.38"
+   },
+   {
+    "index": 167,
+    "prediction": "230.24",
+    "ground_truth": "2297.17"
+   },
+   {
+    "index": 159,
+    "prediction": "1.66",
+    "ground_truth": "1.64"
+   },
+   {
+    "index": 197,
+    "prediction": "109709.5",
+    "ground_truth": "133735.27"
+   },
+   {
+    "index": 186,
+    "prediction": "0.66",
+    "ground_truth": "0.65"
+   },
+   {
+    "index": 173,
+    "prediction": "14.67",
+    "ground_truth": "14.14"
+   },
+   {
+    "index": 191,
+    "prediction": "10.55",
+    "ground_truth": "10.61"
+   },
+   {
+    "index": 196,
+    "prediction": "6.60",
+    "ground_truth": "6.9"
+   }
+  ]
+ }
+}

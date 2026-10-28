@@ -827,3 +827,32 @@
   (61 vs 60 s) and wins it at 2 rps (43 vs 73 s); loses only max-TBT p99 at 2 rps (1.5 vs 1.2 s: decodes
   time-sliced with the backward). Next if needed: the worst-token-gap tail (pause the backward for a decode step
   that has waited > X ms), and the remaining ~12 ms/layer of elementwise backward ops (fusion).
+
+### rsi-e2e-fast — the end-to-end ACE loop (run_e2e.sh) with the RESULTS §7 co-serving changes   (2026-10-28, GPUs 4-7, eval GPU 0)
+- Why: the user asked to rerun the end-to-end ACE experiment on the improved DeltaServe. Prior runs (e2e 10-19 x2):
+  C trained 526K tok in 4 min 35 s / 4 min 37 s; D adapter 75.0 / 74.5 % vs base 68.0 / 66.5 % (p < 0.01).
+- Command: `CONFIG=deltaserve/configs/coserve_e2e_fast.yaml DS_GPUS=4,5,6,7 EVAL_GPU=0 bash deltaserve/scripts/run_e2e.sh e2e_fast`
+- Predicted: C ~2.5 min; C TTFT p50 <= 84 ms; D 74-75 %. FALSIFIED if D < 72 % or C slower than 4.5 min.
+- Actual (work/runs/e2e_fast): C trained 34 cycles / 526K tok in 2 min 38 s (was 4:35); loss 0.287 -> 0.149;
+  D adapter 77.0 % vs base 68.5 % (+22/-5, p = 0.0015); B 427/500. BUT C latency (n=77): TTFT p50/p90/p99
+  96 / 1497 / 2229 ms (was 81 / 173 / 262), < 0.3 s 69 % (was 99 %), e2e p50/p90 5.9 / 11.0 s (was 2.1 / 3.9),
+  per-request max TBT p50 557 ms (was 20 ms). Criteria: training PASS, accuracy PASS, TTFT p50 96 > 84 FAIL.
+- Decision: the §7 admission settings (phase both, stall budget 0.5, no prefill pause) are tuned for throughput
+  under mixed traffic; at 0.5 rps light formula traffic the old conservative admission already finds enough idle
+  GPU time, and the aggressive one just stalls users. Next: rsi-e2e-fastbwd — the ORIGINAL admission + only the
+  fast backward (backward_tf32, backward_attn_sdpa).
+
+### rsi-e2e-fastbwd — end-to-end loop, original admission + only the fast backward   (2026-10-28, GPUs 4-7, eval GPU 0)
+- Why: rsi-e2e-fast trained 42 % faster but hurt C latency badly (TTFT p90 1.5 s). Separate the two effects: keep
+  coserve_e2e.yaml's admission (idle-gap FT, RPS throttle, prefill phase, SLO 0.3 / 0.05) and turn on only
+  backward_tf32 + backward_attn_sdpa.
+- Command: `CONFIG=deltaserve/configs/coserve_e2e_fastbwd.yaml DS_GPUS=4,5,6,7 EVAL_GPU=0 bash deltaserve/scripts/run_e2e.sh e2e_fastbwd`
+- Predicted: C ~3-3.5 min (backward 1.7x faster, forward/idle-gap admission unchanged); C TTFT like the old runs
+  (p50 ~85 ms, p99 < 0.8 s, < 0.3 s >= 95 %); D 74-77 %. FALSIFIED if C TTFT p90 > 0.4 s or C not faster than 4:35.
+- Actual (work/runs/e2e_fastbwd): C 34 cycles / 527K tok in 3 min 25 s (old 4:35, -25 %); loss 0.286 -> 0.152;
+  C TTFT p50/p90/p99 77 / 123 / 246 ms, < 0.3 s 99 % (old 81 / 173 / 262, 99 %); e2e p50/p90 1.99 / 3.12 s (old
+  2.06 / 3.94); max TBT p50 17 ms (old 20). D 74.0 % vs base 68.0 % (+19/-7, p = 0.029; old 75.0 / 74.5). PASS on
+  all three predictions.
+- Decision: for the light single-task e2e loop the right setting is the original admission + the fast backward
+  (configs/coserve_e2e_fastbwd.yaml): faster training at unchanged latency. The aggressive §7 admission is for
+  heavy mixed traffic, where idle GPU time is scarce.

@@ -1,0 +1,6 @@
+A_inference_only  n= 200 TTFT p50/p90/p99 = 35/41/54 ms  SLO<0.3s 99.5%  E2E p50/p99 = 1.63/6.17 s  errors 0
+C_coserving       n=  91 TTFT p50/p90/p99 = 77/123/360 ms  SLO<0.3s 98.9%  E2E p50/p99 = 1.99/4.89 s  errors 0
+B traces: 428/500 correct
+training: 34 cycles, 527204 tokens, 2026-10-28T17:37:16.752 -> 2026-10-28T17:40:41.646, epoch mean loss {'0': 0.2855865328758559, '1': 0.15195027919983733}
+test accuracy [base]: 68.0
+test accuracy [rsi]: 74.0

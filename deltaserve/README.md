@@ -118,6 +118,10 @@ python3 deltaserve/scripts/compare.py deltaserve/work/runs/my_run/eval formula b
 Knobs (environment): `RPS` (0.5), `B_CONCURRENCY` (16), `DS_GPUS` (0,1,2,3), `EVAL_GPU` (4), `DS_PORT` (8000),
 `PLAYBOOK`, `SKIP_BASE_EVAL=1`. The training recipe and SLOs are in `configs/coserve_e2e.yaml`.
 
+Faster training at the same latency: `CONFIG=$PWD/deltaserve/configs/coserve_e2e_fastbwd.yaml bash deltaserve/scripts/run_e2e.sh`
+(the fast backward; C trains in 3:25 instead of 4:35, RESULTS §1 run 4). `coserve_e2e_fast.yaml` adds the §7
+admission changes, which suit heavy mixed traffic but stall users at this light load.
+
 ### Paper metrics (LoRA vs skills in context)
 ```bash
 bash deltaserve/scripts/paper_run.sh paper1        # ~65 min on 8 GPUs: the loop + 16 evals + serving cost + leakage + GPU util

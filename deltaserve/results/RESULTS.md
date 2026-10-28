@@ -57,6 +57,26 @@ The adapter gain reproduces: +7 and +8 points, both p < 0.01. Base accuracy move
 at temperature 0 (vLLM batching), which is why both runs re-measure the base. The co-serving p99 TTFT varies between
 runs (725 vs 217 ms), so the tail is sensitive to how training cycles happen to overlap prefills.
 
+### Runs 3-4 — with the 2026-10-28 DeltaServe changes (`e2e_fast_2026-10-28/`, `e2e_fastbwd_2026-10-28/`)
+
+Same script on GPUs 4-7 (`CONFIG=` picks the server config). Run 3 uses every §7 change; run 4 keeps the original
+admission and turns on only the fast backward (TF32 + fused SDPA attention).
+
+| | runs 1-2 (original) | run 3: all §7 changes | **run 4: fast backward only** |
+|---|---|---|---|
+| config | `coserve_e2e.yaml` | `coserve_e2e_fast.yaml` | **`coserve_e2e_fastbwd.yaml`** |
+| C: training 526K tokens while serving | 4 min 35 s / 4 min 37 s | 2 min 38 s | **3 min 25 s** |
+| C: TTFT p50 / p90 / p99 | 81-84 / 173 / 217-262 ms | 96 / 1497 / 2229 ms | **77 / 123 / 246 ms** |
+| C: TTFT < 0.3 s | 96.6-99.1 % | 69 % | **99 %** |
+| C: end-to-end p50 / p90 | 2.06 / 3.94 s | 5.91 / 10.96 s | **1.99 / 3.12 s** |
+| D: adapter vs base (ACE test) | 75.0 vs 68.0, 74.5 vs 66.5 | 77.0 vs 68.5 (p=0.0015) | 74.0 vs 68.0 (p=0.029) |
+
+- The fast backward alone trains 25 % faster at unchanged latency: at 0.5 rps of formula traffic the GPU is idle
+  often enough that the original idle-gap admission is not the limit, the backward is.
+- The aggressive §7 admission (FT on decode steps, no prefill pause, 50 % stall budget) trains fastest but stalls
+  users in this light regime (TTFT p90 1.5 s). It is the right choice for heavy mixed traffic (§7), not here.
+- Adapter accuracy stays within the ~1.5-point eval noise of runs 1-2 in both (the loss curves are unchanged).
+
 ## 2. Training only on the ACE SFT data (`scripts/run_train.sh`; `train_only_2026-10-19/`)
 
 DeltaServe trained `sft/data_v2/{formula,finer}.jsonl` (the files behind `benchmarks/ace` LoRA results) with no
